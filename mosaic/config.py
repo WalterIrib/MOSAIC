@@ -224,6 +224,122 @@ class TEConfig:
     promoter_window_upstream: int = 2000
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# New v2 config sections
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dc.dataclass
+class DatabasesConfig:
+    """Paths to all reference databases."""
+    db_root:       str = ""
+    genome_fa:     str = ""
+    gtf:           str = ""
+    star_index:    str = ""
+    te_consensus:  str = ""
+    te_satellite:  str = ""
+    rmsk_bed:      str = ""
+    te_gtf:        str = ""
+    kraken2_db:    str = ""
+    metaphlan_db:  str = ""
+    chocophlan_db: str = ""
+    uniref_db:     str = ""
+    arriba_bin:    str = ""
+    arriba_db:     str = ""
+    auto_download: bool = True
+
+    def get(self, key: str, default: str = "") -> str:
+        return getattr(self, key, default) or default
+
+
+@dc.dataclass
+class ThresholdsConfig:
+    """Analysis thresholds — production values."""
+    padj:               float = 0.05
+    lfc:                float = 1.0
+    min_cov_editing:    int   = 5
+    min_score_editing:  float = 1.5
+    min_ef_editing:     float = 0.05
+    editing_model:      str   = "DirMult:PHRED"
+    min_reads_splicing: int   = 10
+    min_clip_te:        int   = 30
+    min_support_te:     int   = 2
+    min_reads_meta:     int   = 10
+    min_samples_meta:   int   = 2
+
+
+@dc.dataclass
+class EnvironmentsConfig:
+    """Conda environment names for each tool group."""
+    main:   str          = "mosaic"
+    humann: str          = "humann3"
+    arriba: Optional[str] = None   # None = use arriba_bin directly
+
+
+@dc.dataclass
+class SamplesConfig:
+    """Sample metadata and FASTQ locations."""
+    fastq_dir: str = ""
+    coldata:   str = ""
+    download:  list = dc.field(default_factory=list)
+
+    # Populated at load time from coldata TSV
+    sample_ids:  list = dc.field(default_factory=list, init=False)
+    coldata_df:  Any  = dc.field(default=None, init=False)
+
+    def load_coldata(self) -> None:
+        """Load coldata TSV and extract sample_ids."""
+        import csv
+        p = Path(self.coldata)
+        if not p.exists():
+            return
+        with open(p) as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            rows = list(reader)
+        self.sample_ids = [r["sample_id"] for r in rows]
+        # Store as simple list of dicts (avoid pandas dependency)
+        self.coldata_df = rows
+
+    def get_condition_samples(self, condition: str) -> list:
+        """Return sample_ids for a given condition."""
+        if not self.coldata_df:
+            return []
+        return [r["sample_id"] for r in self.coldata_df
+                if r.get("condition") == condition]
+
+
+@dc.dataclass
+class ModulesV2Config:
+    """Per-module enable/disable flags (v2 schema)."""
+    m00_download:      bool = False
+    m02_trim:          bool = True
+    m04_star:          bool = True
+    m05_te_count:      bool = True
+    m06_circrna:       bool = True
+    m07_strandedness:  bool = True
+    m08_deseq2:        bool = True
+    m09_satellite:     bool = True
+    m10_go:            bool = True
+    m11_te_host:       bool = True
+    m11b_promoter_te:  bool = True
+    m11c_te_age:       bool = True
+    m11d_te_de:        bool = True
+    m12_tetranscripts: bool = True
+    m15_fusion:        bool = True
+    m16_stringtie:     bool = True
+    m17_rmats:         bool = True
+    m18_network:       bool = True
+    m19_editing:       bool = True
+    m20_meta:          bool = True
+    m20b_humann:       bool = True
+    m23_te_insertions: bool = True
+    m14_report:        bool = True
+
+    def enabled(self) -> list:
+        """Return list of enabled module names."""
+        return [k for k, v in vars(self).items() if v and k.startswith("m")]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Root config
 # ─────────────────────────────────────────────────────────────────────────────
@@ -240,6 +356,15 @@ class MosaicConfig:
     circrna:      CircRNAConfig      = dc.field(default_factory=CircRNAConfig)
     de:           DEConfig           = dc.field(default_factory=DEConfig)
     te:           TEConfig           = dc.field(default_factory=TEConfig)
+    # v2 fields
+    databases:    DatabasesConfig    = dc.field(default_factory=DatabasesConfig)
+    thresholds:   ThresholdsConfig   = dc.field(default_factory=ThresholdsConfig)
+    environments: EnvironmentsConfig = dc.field(default_factory=EnvironmentsConfig)
+    samples:      SamplesConfig      = dc.field(default_factory=SamplesConfig)
+    modules_v2:   ModulesV2Config    = dc.field(default_factory=ModulesV2Config)
+    comparisons:  list               = dc.field(default_factory=list)
+    threads:      int                = 20
+    memory_gb:    int                = 30
 
     # Derived (set during validate)
     genome_build_resolved: str = dc.field(default="", init=False)
@@ -436,6 +561,103 @@ def load_config(path: str | Path) -> MosaicConfig:
         promoter_window_upstream=int(te_raw.get("promoter_window_upstream", 2000)),
     )
 
+    # ── v2 fields ────────────────────────────────────────────────────────────
+    db_raw = raw.get("databases", {})
+    databases = DatabasesConfig(
+        db_root=db_raw.get("db_root", ""),
+        genome_fa=db_raw.get("genome_fa", ""),
+        gtf=db_raw.get("gtf", ""),
+        star_index=db_raw.get("star_index", ""),
+        te_consensus=db_raw.get("te_consensus", ""),
+        te_satellite=db_raw.get("te_satellite", ""),
+        rmsk_bed=db_raw.get("rmsk_bed", ""),
+        te_gtf=db_raw.get("te_gtf", ""),
+        kraken2_db=db_raw.get("kraken2_db", ""),
+        metaphlan_db=db_raw.get("metaphlan_db", ""),
+        chocophlan_db=db_raw.get("chocophlan_db", ""),
+        uniref_db=db_raw.get("uniref_db", ""),
+        arriba_bin=db_raw.get("arriba_bin", ""),
+        arriba_db=db_raw.get("arriba_db", ""),
+        auto_download=db_raw.get("auto_download", True),
+    )
+
+    thr_raw = raw.get("thresholds", {})
+    thresholds = ThresholdsConfig(
+        padj=float(thr_raw.get("padj", 0.05)),
+        lfc=float(thr_raw.get("lfc", 1.0)),
+        min_cov_editing=int(thr_raw.get("min_cov_editing", 5)),
+        min_score_editing=float(thr_raw.get("min_score_editing", 1.5)),
+        min_ef_editing=float(thr_raw.get("min_ef_editing", 0.05)),
+        editing_model=thr_raw.get("editing_model", "DirMult:PHRED"),
+        min_reads_splicing=int(thr_raw.get("min_reads_splicing", 10)),
+        min_clip_te=int(thr_raw.get("min_clip_te", 30)),
+        min_support_te=int(thr_raw.get("min_support_te", 2)),
+        min_reads_meta=int(thr_raw.get("min_reads_meta", 10)),
+        min_samples_meta=int(thr_raw.get("min_samples_meta", 2)),
+    )
+
+    env_raw = raw.get("environments", {})
+    environments = EnvironmentsConfig(
+        main=env_raw.get("main", "mosaic"),
+        humann=env_raw.get("humann", "humann3"),
+        arriba=env_raw.get("arriba", None),
+    )
+
+    smp_raw = raw.get("samples", {})
+    samples = SamplesConfig(
+        fastq_dir=smp_raw.get("fastq_dir", ""),
+        coldata=smp_raw.get("coldata", ""),
+        download=smp_raw.get("download", []),
+    )
+    samples.load_coldata()
+
+    mod2_raw = raw.get("modules", {})
+    # Support both old (te_locus_specific etc.) and new (m08_deseq2 etc.) keys
+    modules_v2 = ModulesV2Config(
+        m00_download=mod2_raw.get("m00_download", False),
+        m02_trim=mod2_raw.get("m02_trim", True),
+        m04_star=mod2_raw.get("m04_star", True),
+        m05_te_count=mod2_raw.get("m05_te_count", True),
+        m06_circrna=mod2_raw.get("m06_circrna", mod2_raw.get("circrna", True)),
+        m07_strandedness=mod2_raw.get("m07_strandedness", True),
+        m08_deseq2=mod2_raw.get("m08_deseq2", True),
+        m09_satellite=mod2_raw.get("m09_satellite", True),
+        m10_go=mod2_raw.get("m10_go", True),
+        m11_te_host=mod2_raw.get("m11_te_host", True),
+        m11b_promoter_te=mod2_raw.get("m11b_promoter_te", True),
+        m11c_te_age=mod2_raw.get("m11c_te_age", True),
+        m11d_te_de=mod2_raw.get("m11d_te_de", True),
+        m12_tetranscripts=mod2_raw.get("m12_tetranscripts",
+                                        mod2_raw.get("te_locus_specific", True)),
+        m15_fusion=mod2_raw.get("m15_fusion", True),
+        m16_stringtie=mod2_raw.get("m16_stringtie",
+                                    mod2_raw.get("de_novo", True)),
+        m17_rmats=mod2_raw.get("m17_rmats",
+                                mod2_raw.get("alt_splicing", True)),
+        m18_network=mod2_raw.get("m18_network", True),
+        m19_editing=mod2_raw.get("m19_editing", True),
+        m20_meta=mod2_raw.get("m20_meta",
+                               mod2_raw.get("microbial", True)),
+        m20b_humann=mod2_raw.get("m20b_humann", True),
+        m23_te_insertions=mod2_raw.get("m23_te_insertions", True),
+        m14_report=mod2_raw.get("m14_report", True),
+    )
+
+    comparisons = raw.get("comparisons", [])
+    # Fallback: build from project biological_context
+    if not comparisons and project.biological_context == "tumor":
+        comparisons = [{"treatment": "tumor", "control": "normal"}]
+
+    threads   = int(raw.get("threads", 20))
+    memory_gb = int(raw.get("memory_gb", 30))
+
+    # Also read sequencing section
+    seq_raw = raw.get("sequencing", {})
+    if seq_raw.get("type") and not lib_raw.get("layout"):
+        library.layout = seq_raw["type"]
+    if seq_raw.get("strandedness"):
+        library._strandedness_config = seq_raw["strandedness"]
+
     cfg = MosaicConfig(
         project=project,
         library=library,
@@ -447,6 +669,14 @@ def load_config(path: str | Path) -> MosaicConfig:
         circrna=circrna,
         de=de,
         te=te,
+        databases=databases,
+        thresholds=thresholds,
+        environments=environments,
+        samples=samples,
+        modules_v2=modules_v2,
+        comparisons=comparisons,
+        threads=threads,
+        memory_gb=memory_gb,
     )
     cfg.validate()
     return cfg

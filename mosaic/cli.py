@@ -314,24 +314,9 @@ def db_check(config_file: str) -> None:
     """Check which databases are present and up-to-date."""
     setup_logging()
     cfg = load_config(config_file)
-    dbs = vars(cfg.databases)
-
-    section("Database Status")
-    all_ok = True
-    for name, path in dbs.items():
-        if path and path != "auto":
-            p = Path(str(path))
-            exists = p.exists()
-            icon = "✓" if exists else "✗"
-            status = "OK" if exists else "MISSING"
-            if not exists:
-                all_ok = False
-            print(f"  {icon} {name:<30} {status}  {p}")
-
-    if all_ok:
-        success("All databases present.")
-    else:
-        warn("Some databases are missing. Run: mosaic db download --config ...")
+    from .db_manager import DatabaseManager
+    db_mgr = DatabaseManager(cfg, cfg.project.organism)
+    db_mgr.check_all()
 
 
 @cmd_db.command("download")

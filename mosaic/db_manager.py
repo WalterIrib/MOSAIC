@@ -214,23 +214,26 @@ class DatabaseManager:
 
     def check_all(self) -> Dict[str, bool]:
         """Check presence of all required databases."""
+        db = self.cfg.databases
+        # Only check path-type fields (skip booleans like auto_download)
+        path_fields = {
+            "genome_fa", "gtf", "star_index", "te_consensus",
+            "te_satellite", "rmsk_bed", "te_gtf", "kraken2_db",
+            "metaphlan_db", "chocophlan_db", "uniref_db",
+            "arriba_bin", "arriba_db",
+        }
         required = {
-            "genome":       Path(getattr(self.cfg.databases, "genome_fa", "")),
-            "gtf":          Path(getattr(self.cfg.databases, "gtf", "")),
-            "star_index":   Path(getattr(self.cfg.databases, "star_index", "")),
-            "rmsk":         Path(getattr(self.cfg.databases, "rmsk_bed", "")),
-            "te_consensus": Path(getattr(self.cfg.databases, "te_consensus", "")),
-            "kraken2_db":   Path(getattr(self.cfg.databases, "kraken2_db", "")),
-            "metaphlan_db": Path(getattr(self.cfg.databases, "metaphlan_db", "")),
-            "arriba_bin":   Path(getattr(self.cfg.databases, "arriba_bin", "")),
+            k: Path(getattr(db, k, "") or "")
+            for k in path_fields
         }
 
         status = {}
         for name, path in required.items():
-            if not str(path) or str(path) == ".":
-                status[name] = False
-                warn(f"  ✗ {name}: not configured")
-            elif path.exists():
+            p_str = str(path)
+            if not p_str or p_str in (".", "/path/to/references"):
+                status[name] = None  # not configured = skip
+                continue
+            if path.exists():
                 status[name] = True
                 info(f"  ✓ {name}: {path}")
             else:
