@@ -715,10 +715,13 @@ class ModuleRunner:
         comp_out = self._comparison_dir(comparison)
 
         thresholds = cfg.thresholds
+        # out_dir = main output dir where all module results live
+        # report output goes into comparison subdir
+        main_out = self.out
         ret = run_cmd([
             "quarto", "render",
             str(self.scripts / "m14_report.qmd"),
-            "-P", f"out_dir:{comp_out}",
+            "-P", f"out_dir:{main_out}",
             "-P", f"comparison:{comparison}",
             "-P", f"treatment:{treatment}",
             "-P", f"control:{control}",
