@@ -671,7 +671,7 @@ class ModuleRunner:
             "--od", str(out_dir),
             "--tmp", str(tmp_dir),
             "-t", "paired" if cfg.library.layout == "PE" else "single",
-            "--readLength", str(cfg.sequencing.read_length),
+            "--readLength", str(getattr(getattr(cfg, "sequencing", None), "read_length", None) or 150),
             "--nthread", str(cfg.threads),
             "--novelSS",
         ]
