@@ -107,7 +107,7 @@ def cmd_check(config_file: str) -> None:
 @click.option("--auto-download", is_flag=True, default=False,
               help="Automatically download missing references")
 def cmd_preflight(config_file: str, auto_download: bool) -> None:
-    """Check references and optionally download missing databases."""
+    """Check config, verify all databases, optionally download missing ones."""
     setup_logging()
     try:
         cfg = load_config(config_file)
@@ -115,15 +115,37 @@ def cmd_preflight(config_file: str, auto_download: bool) -> None:
         error(f"Config error: {e}")
         sys.exit(1)
 
-    from .refs import preflight_reference_check
-    preflight_reference_check(
-        db_root=Path(cfg.databases.db_root),
-        organism=cfg.project.organism,
-        build=cfg.genome_build_resolved,
-        auto_update=auto_download,
-        project_wd=Path(cfg.project.wd),
-    )
-    success("Pre-flight complete.")
+    section("MOSAIC Pre-flight Check")
+    info(f"Project:    {cfg.project.name}")
+    info(f"Organism:   {cfg.project.organism} / {cfg.genome_build_resolved}")
+    info(f"Context:    {cfg.project.biological_context}")
+    info(f"Library:    {cfg.library.prep} / {cfg.library.layout}")
+    info(f"Comparisons:")
+    for c in getattr(cfg, "comparisons", []):
+        info(f"  {c.get('treatment')} vs {c.get('control')}")
+
+    # Check databases
+    from .db_manager import DatabaseManager
+    db_mgr = DatabaseManager(cfg, cfg.project.organism)
+    status = db_mgr.check_all()
+
+    missing = [k for k, v in status.items() if v is False]
+
+    if missing and auto_download:
+        info(f"\nDownloading {len(missing)} missing databases...")
+        for component in missing:
+            db_mgr.download(component)
+        # Re-check
+        status = db_mgr.check_all()
+        missing = [k for k, v in status.items() if v is False]
+
+    if missing:
+        warn(f"\n{len(missing)} databases missing: {', '.join(missing)}")
+        warn("Run: mosaic preflight --auto-download config.yaml")
+        sys.exit(1)
+    else:
+        success("\nAll databases present. Ready to run pipeline.")
+        info("Next: mosaic run config.yaml")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -232,7 +232,9 @@ def locus_count(
     loci_by_chrom: dict[str, list] = defaultdict(list)
     n_loci = 0
 
-    with open(rmsk_bed) as fh:
+    import gzip as _gzip
+    _opener = _gzip.open if str(rmsk_bed).endswith(".gz") else open
+    with _opener(rmsk_bed, "rt") as fh:
         for line in fh:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 6:

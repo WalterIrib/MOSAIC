@@ -153,7 +153,8 @@ class PipelineState:
 
 def run_cmd(cmd: List[str], env_name: Optional[str] = None,
             cwd: Optional[Path] = None,
-            log_file: Optional[Path] = None) -> int:
+            log_file: Optional[Path] = None,
+            extra_env: Optional[dict] = None) -> int:
     """
     Run a command, optionally in a specific conda env.
     Returns exit code.
@@ -164,7 +165,12 @@ def run_cmd(cmd: List[str], env_name: Optional[str] = None,
     cmd_str = " ".join(str(c) for c in cmd)
     info(f"$ {cmd_str}")
 
-    kwargs: dict = dict(cwd=cwd)
+    import os
+    run_env = os.environ.copy()
+    if extra_env:
+        run_env.update(extra_env)
+
+    kwargs: dict = dict(cwd=cwd, env=run_env)
     if log_file:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         fh = open(log_file, "w")
@@ -367,13 +373,16 @@ class ModuleRunner:
         return self.out
 
     def _should_run(self, module: str, comparison: Optional[str] = None) -> bool:
-        # Never re-run explicitly skipped modules (e.g. from --from-module)
         key = f"{module}/{comparison}" if comparison else module
         m = self.state.modules.get(key) or self.state.modules.get(module)
-        if m and m.status == "skipped":
-            return False
+        # --force overrides everything except modules skipped by --from-module
+        # (those are marked with a special flag)
+        if m and m.status == "skipped" and getattr(m, "_from_module_skip", False):
+            return False  # explicitly skipped by --from-module, never re-run
         if self.force:
             return True
+        if m and m.status == "skipped":
+            return True   # skipped previously but not by from_module → run now
         return not self.state.is_done(module, comparison)
 
     def run_module(self, module: str,
@@ -747,6 +756,262 @@ class ModuleRunner:
         return ret == 0
 
 
+
+    # ── M09: Satellite quantification ────────────────────────────────────────
+
+    def _run_m09_satellite(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        trim_dir = self.out / "trimmed"
+        out_dir  = self.out / "satellite_counts"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        sat_fa   = Path(cfg.databases.te_satellite)
+        layout   = cfg.library.layout
+
+        if not sat_fa.exists():
+            warn(f"Satellite consensus not found: {sat_fa}")
+            return True  # non-blocking
+
+        # Build bowtie2 index if missing
+        bt2_idx = sat_fa.parent / sat_fa.stem
+        if not (sat_fa.parent / f"{sat_fa.stem}.1.bt2").exists() and            not (sat_fa.parent / f"{sat_fa.stem}.1.bt2l").exists():
+            info(f"Building bowtie2 index for satellite consensus...")
+            ret = run_cmd(["bowtie2-build", str(sat_fa), str(bt2_idx)],
+                          log_file=self._log("m09_bt2_build"))
+            if ret != 0:
+                warn("bowtie2-build failed for satellite — skipping")
+                return True  # non-blocking
+
+        all_ok = True
+        processed = 0
+        fastq_dir = Path(cfg.samples.fastq_dir)
+        for sid in cfg.samples.sample_ids:
+            r1 = trim_dir / sid / f"{sid}_R1_trimmed.fastq.gz"
+            # Fallback to original FASTQ if trimmed not available
+            if not r1.exists():
+                r1 = fastq_dir / sid / f"{sid}_R1.fastq.gz"
+            if not r1.exists():
+                r1 = fastq_dir / sid / f"{sid}_1.fastq.gz"
+            if not r1.exists():
+                warn(f"No reads found for {sid} — skipping satellite count")
+                continue
+            processed += 1
+            sid_out = out_dir / sid
+            sid_out.mkdir(exist_ok=True)
+            reads = [str(r1)]
+            if layout == "PE":
+                r2 = trim_dir / sid / f"{sid}_R2_trimmed.fastq.gz"
+                if r2.exists():
+                    reads.append(str(r2))
+
+            ret = run_cmd([
+                "bowtie2",
+                "--very-sensitive-local",
+                "-x", str(sat_fa.parent / sat_fa.stem),
+                "-1" if layout == "PE" else "-U", reads[0],
+            ] + (["-2", reads[1]] if len(reads) > 1 else []) + [
+                "--no-unal", "-p", str(cfg.threads),
+                "-S", str(sid_out / f"{sid}_satellite.sam"),
+            ], log_file=self._log("m09_satellite", sid))
+            if ret != 0:
+                all_ok = False
+        if processed == 0:
+            warn("No reads found for satellite counting — skipping")
+            return True  # non-blocking
+        return all_ok
+
+    # ── M11: TE host genes ────────────────────────────────────────────────────
+
+    def _run_m11_te_host(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        out_dir = self.out / "m11"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        te_counts = self.out / "integrated" / "te_counts_clean.tsv"
+
+        return run_cmd([
+            sys.executable, str(self.scripts / "m11_te_host_genes.py"),
+            "--rmsk",      str(Path(cfg.databases.rmsk_bed)),
+            "--gtf",       str(Path(cfg.databases.gtf)),
+            "--outdir",    str(out_dir),
+        ] + (["--te-counts", str(te_counts)] if te_counts.exists() else []),
+            log_file=self._log("m11_te_host")) == 0
+
+    # ── M11b: Promoter TE ────────────────────────────────────────────────────
+
+    def _run_m11b_promoter_te(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        out_dir = self.out / "m11b"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        import os as _os
+        env_vars = _os.environ.copy()
+        env_vars["PYTHONPATH"] = str(self.scripts.parent)
+        return run_cmd([
+            sys.executable, str(self.scripts.parent / "mosaic" / "m11b_promoter_te.py"),
+            "--rmsk-bed",  str(Path(cfg.databases.rmsk_bed)),
+            "--gtf",       str(Path(cfg.databases.gtf)),
+            "--outdir",    str(out_dir),
+        ], log_file=self._log("m11b_promoter_te"),
+            extra_env={"PYTHONPATH": str(self.scripts.parent)}) == 0
+
+    # ── M11c: TE age ─────────────────────────────────────────────────────────
+
+    def _run_m11c_te_age(self, comparison=None) -> bool:
+        cfg      = self.cfg
+        comp     = self._parse_comparison(comparison)
+        if not comp:
+            return False
+        treatment, control = comp
+        comp_dir = self._comparison_dir(comparison)
+        te_de    = comp_dir / "deseq2" / f"TE_{comparison}_DE.tsv"
+        out_dir  = self.out / "m11c"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        return run_r_script(self.scripts / "m11c_te_age.R", [
+            "--te-de",     str(te_de),
+            "--rmsk-bed",  str(Path(cfg.databases.rmsk_bed)),
+            "--outdir",    str(out_dir),
+            "--treatment", treatment,
+            "--control",   control,
+        ], log_file=self._log("m11c_te_age", comparison)) == 0
+
+    # ── M11d: TE DE integration ───────────────────────────────────────────────
+
+    def _run_m11d_te_de(self, comparison=None) -> bool:
+        cfg      = self.cfg
+        comp     = self._parse_comparison(comparison)
+        if not comp:
+            return False
+        treatment, control = comp
+        comp_dir = self._comparison_dir(comparison)
+        out_dir  = comp_dir / "m11d"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        return run_r_script(self.scripts / "m11d_te_de_integration.R", [
+            "--de-genes",      str(comp_dir / "deseq2" / f"genes_{comparison}_DE.tsv"),
+            "--norm-counts",   str(comp_dir / "deseq2" / "normalized_counts.tsv"),
+            "--te-prom-genes", str(self.out / "m11b" / "te_promoter_genes.tsv"),
+            "--rmsk-bed",      str(Path(cfg.databases.rmsk_bed)),
+            "--gtf",           str(Path(cfg.databases.gtf)),
+            "--gene-map",      str(self.out / "integrated" / "gene_type_map.tsv"),
+            "--outdir",        str(out_dir),
+            "--treatment",     treatment,
+            "--control",       control,
+            "--padj",          str(cfg.thresholds.padj),
+            "--lfc",           str(cfg.thresholds.lfc),
+        ], log_file=self._log("m11d_te_de", comparison)) == 0
+
+    # ── M12: TEtranscripts locus-level ────────────────────────────────────────
+
+    def _run_m12_tetranscripts(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        bam_dir = self.out / "mapping" / "bam"
+        out_dir = self.out / "m12"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        strand  = self._get_consensus_strandedness()
+        stranded = "no" if strand == "unstranded" else (
+            "reverse" if strand == "RF" else "yes")
+
+        return run_cmd([
+            sys.executable, str(self.scripts / "m12_te_locus.py"),
+            "locus-count",
+            "--bam-dir",  str(bam_dir),
+            "--rmsk-bed", str(Path(cfg.databases.rmsk_bed)),
+            "--outdir",   str(out_dir),
+        ], log_file=self._log("m12_tetranscripts")) == 0
+
+
+    # ── M09: Satellite quantification ────────────────────────────────────────
+
+    def _run_m09_satellite(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        trim_dir = self.out / "trimmed"
+        out_dir  = self.out / "te_counts" / "satellite"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        sat_fa   = Path(cfg.databases.te_satellite)
+        layout   = cfg.library.layout
+
+        all_ok = True
+        for sid in cfg.samples.sample_ids:
+            sid_out = out_dir / sid
+            sid_out.mkdir(exist_ok=True)
+            r1 = trim_dir / sid / f"{sid}_R1_trimmed.fastq.gz"
+            if not r1.exists():
+                # Try mapped unmapped reads or original
+                r1 = self.out / "mapping" / "bam" / sid / f"{sid}_Unmapped.out.mate1"
+            if not r1.exists():
+                warn(f"No reads for satellite quantification: {sid}")
+                continue
+            reads = [str(r1)]
+            if layout == "PE":
+                r2 = trim_dir / sid / f"{sid}_R2_trimmed.fastq.gz"
+                if r2.exists():
+                    reads.append(str(r2))
+            ret = run_cmd([
+                "bowtie2", "--very-sensitive-local",
+                "-x", str(sat_fa.with_suffix("")),
+                "-1" if layout == "PE" else "-U", reads[0],
+            ] + (["-2", reads[1]] if len(reads) > 1 else []) + [
+                "-S", str(sid_out / f"{sid}_satellite.sam"),
+                "-p", str(cfg.threads),
+                "--no-unal",
+            ], log_file=self._log("m09_satellite", sid))
+            if ret != 0:
+                all_ok = False
+        return all_ok
+
+    # ── M11: TE host genes ───────────────────────────────────────────────────
+
+    def _run_m11_te_host(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        out_dir = self.out / "m11"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        te_counts = self.out / "integrated" / "te_counts_clean.tsv"
+        return run_cmd([
+            sys.executable, str(self.scripts / "m11_te_host_genes.py"),
+            "--rmsk",      str(Path(cfg.databases.rmsk_bed)),
+            "--gtf",       str(Path(cfg.databases.gtf)),
+            "--outdir",    str(out_dir),
+        ] + (["--te-counts", str(te_counts)] if te_counts.exists() else []),
+            log_file=self._log("m11_te_host")) == 0
+
+    # ── M11b: Promoter TE ────────────────────────────────────────────────────
+
+    def _run_m11b_promoter_te(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        out_dir = self.out / "m11b"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return run_cmd([
+            sys.executable, "-m", "mosaic.m11b_promoter_te",
+            "--rmsk",   str(Path(cfg.databases.rmsk_bed)),
+            "--gtf",    str(Path(cfg.databases.gtf)),
+            "--outdir", str(out_dir),
+        ], log_file=self._log("m11b_promoter_te")) == 0
+
+    # ── M11c: TE age analysis ────────────────────────────────────────────────
+
+    def _run_m11c_te_age(self, comparison=None) -> bool:
+        cfg      = self.cfg
+        comp     = self._parse_comparison(comparison)
+        if not comp:
+            return False
+        treatment, control = comp
+        comp_dir = self._comparison_dir(comparison)
+        out_dir  = comp_dir / "m11c"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        te_de    = comp_dir / "deseq2" / f"TE_{comparison}_DE.tsv"
+        return run_r_script(self.scripts / "m11c_te_age.R", [
+            "--te-de",     str(te_de),
+            "--rmsk-bed",  str(Path(cfg.databases.rmsk_bed)),
+            "--outdir",    str(out_dir),
+            "--treatment", treatment,
+            "--control",   control,
+        ], log_file=self._log("m11c_te_age", comparison)) == 0
+
+    # ── M11d: TE-DE integration ──────────────────────────────────────────────
+
+
+
+
     # ── M10: GO/KEGG enrichment ──────────────────────────────────────────────
 
     def _run_m10_go(self, comparison=None) -> bool:
@@ -895,7 +1160,7 @@ class ModuleRunner:
 
         # m19 takes comma-separated BAM lists
         ret = run_cmd([
-            "python", str(self.scripts.parent / "mosaic" / "m19_rna_editing.py"),
+            sys.executable, str(self.scripts.parent / "mosaic" / "m19_rna_editing.py"),
             "--bam-normal", ",".join(normal_bams),
             "--bam-tumor",  ",".join(tumor_bams),
             "--ref",        str(Path(cfg.databases.genome_fa)),
@@ -1035,7 +1300,7 @@ class ModuleRunner:
             for sid in cfg.samples.get_condition_samples(treatment))
 
         return run_cmd([
-            "python", str(self.scripts.parent / "mosaic" / "m23_te_insertions.py"),
+            sys.executable, str(self.scripts.parent / "mosaic" / "m23_te_insertions.py"),
             "--chimeric-normal",  normal_chim,
             "--chimeric-tumor",   tumor_chim,
             "--te-consensus",     str(Path(cfg.databases.te_consensus)),
@@ -1285,9 +1550,12 @@ class Pipeline:
         if self.from_mod:
             all_mods = self._resolve_order(list(MODULE_DEPS.keys()))
             idx = all_mods.index(self.from_mod) if self.from_mod in all_mods else 0
-            for m in all_mods[:idx]:
-                self.state.mark(m, "skipped")
-                self.state.save()
+            for mod_name in all_mods[:idx]:
+                self.state.mark(mod_name, "skipped")
+                m = self.state.modules.get(mod_name)
+                if m:
+                    m._from_module_skip = True
+            self.state.save()
 
         # Resolve execution order
         order = self._resolve_order(enabled)
