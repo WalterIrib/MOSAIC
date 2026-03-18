@@ -367,6 +367,11 @@ class ModuleRunner:
         return self.out
 
     def _should_run(self, module: str, comparison: Optional[str] = None) -> bool:
+        # Never re-run explicitly skipped modules (e.g. from --from-module)
+        key = f"{module}/{comparison}" if comparison else module
+        m = self.state.modules.get(key) or self.state.modules.get(module)
+        if m and m.status == "skipped":
+            return False
         if self.force:
             return True
         return not self.state.is_done(module, comparison)
@@ -679,8 +684,13 @@ class ModuleRunner:
             cmd.append("--statoff")
 
         ret = run_cmd(cmd, log_file=self._log("m17_rmats", comparison))
-        if ret != 0:
+        # rMATS may return non-zero even on partial success — check output exists
+        rmats_out = out_dir / "SE.MATS.JCEC.txt"
+        if ret != 0 and not rmats_out.exists():
+            warn(f"rMATS failed (exit {ret}) and no output found")
             return False
+        if ret != 0:
+            warn(f"rMATS returned exit {ret} but output exists — continuing")
 
         # Run R analysis
         thresholds = cfg.thresholds
@@ -807,19 +817,42 @@ class ModuleRunner:
             if ret != 0:
                 warn(f"StringTie assembly failed for {sid}")
 
-        # Merge and DE analysis
-        comp_dir = self._comparison_dir(comparison)
-        de_file  = comp_dir / "deseq2" / f"genes_{comparison}_DE.tsv"
-        return run_r_script(self.scripts / "m16_stringtie_de.R", [
-            "--stringtie-dir", str(out_dir),
-            "--de-genes",      str(de_file),
-            "--gtf",           str(gtf),
-            "--outdir",        str(out_dir),
-            "--treatment",     treatment,
-            "--control",       control,
-            "--padj",          str(cfg.thresholds.padj),
-            "--lfc",           str(cfg.thresholds.lfc),
-        ], log_file=self._log("m16_stringtie_r", comparison)) == 0
+        # StringTie merge with gffcmp
+        merged_gtf = out_dir / "merged.gtf"
+        gtf_list   = out_dir / "gtf_list.txt"
+        sample_gtfs = list(out_dir.glob("*/*.gtf"))
+
+        if sample_gtfs:
+            gtf_list.write_text("\n".join(str(g) for g in sample_gtfs))
+            run_cmd(["stringtie", "--merge",
+                     "-G", str(gtf),
+                     "-o", str(merged_gtf),
+                     str(gtf_list)],
+                    log_file=self._log("m16_stringtie_merge"))
+            run_cmd(["gffcompare",
+                     "-r", str(gtf),
+                     "-o", str(out_dir / "gffcmp"),
+                     str(merged_gtf)],
+                    log_file=self._log("m16_gffcmp"))
+
+        # DE analysis
+        tmap       = out_dir / "gffcmp.merged.gtf.tmap"
+        novel_tmap = out_dir / "novel_transcripts.tmap"
+        args = [
+            "--st-dir",    str(out_dir),
+            "--coldata",   str(self._write_coldata(comparison)),
+            "--outdir",    str(out_dir),
+            "--treatment", treatment,
+            "--control",   control,
+            "--padj",      str(cfg.thresholds.padj),
+            "--lfc",       str(cfg.thresholds.lfc),
+        ]
+        if tmap.exists():
+            args += ["--tmap", str(tmap)]
+        if novel_tmap.exists():
+            args += ["--novel-tmap", str(novel_tmap)]
+        return run_r_script(self.scripts / "m16_stringtie_de.R", args,
+                            log_file=self._log("m16_stringtie_r", comparison)) == 0
 
     # ── M17: rMATS (already defined above, keep stub) ───────────────────────
 
@@ -860,11 +893,12 @@ class ModuleRunner:
         normal_bams = self._get_condition_bams(control)
         tumor_bams  = self._get_condition_bams(treatment)
 
+        # m19 takes comma-separated BAM lists
         ret = run_cmd([
             "python", str(self.scripts.parent / "mosaic" / "m19_rna_editing.py"),
-            "--normal",     ",".join(normal_bams),
-            "--tumor",      ",".join(tumor_bams),
-            "--genome-fa",  str(Path(cfg.databases.genome_fa)),
+            "--bam-normal", ",".join(normal_bams),
+            "--bam-tumor",  ",".join(tumor_bams),
+            "--ref",        str(Path(cfg.databases.genome_fa)),
             "--gtf",        str(Path(cfg.databases.gtf)),
             "--outdir",     str(out_dir),
             "--threads",    str(cfg.threads),
@@ -926,10 +960,21 @@ class ModuleRunner:
         out_dir.mkdir(parents=True, exist_ok=True)
         env     = cfg.environments.humann or "humann3"
 
+        # Check humann env
+        import subprocess as _sp
+        env_check = _sp.run(["conda", "run", "-n", env,
+                              "humann", "--version"],
+                             capture_output=True, text=True)
+        if env_check.returncode != 0:
+            warn(f"humann not found in env '{env}' — skipping M20b")
+            warn("Install: conda activate humann3 && pip install humann")
+            return True  # non-blocking
+
         all_ok = True
         for sid in cfg.samples.sample_ids:
             unmapped = bam_dir / sid / f"{sid}_Unmapped.out.mate1"
             if not unmapped.exists():
+                warn(f"Unmapped reads not found for {sid}")
                 continue
             sid_out = out_dir / sid
             sid_out.mkdir(exist_ok=True)
@@ -1225,16 +1270,24 @@ class Pipeline:
         if modules:
             enabled = modules
         else:
-            mods_cfg = self.cfg.modules
-            enabled  = [m for m, v in vars(mods_cfg).items() if v]
+            # Use v2 modules config if available
+            mods_v2 = getattr(self.cfg, "modules_v2", None)
+            if mods_v2 and hasattr(mods_v2, "enabled"):
+                enabled = mods_v2.enabled()
+            else:
+                # Fallback to old modules config
+                mods_cfg = self.cfg.modules
+                enabled = [m for m, v in vars(mods_cfg).items()
+                           if isinstance(v, bool) and v]
 
-        # If --from-module specified, mark earlier modules as done
-        if self.from_mod and not self.force:
+        # If --from-module specified, mark earlier modules as skipped
+        # (regardless of --force — we never re-run modules before from_module)
+        if self.from_mod:
             all_mods = self._resolve_order(list(MODULE_DEPS.keys()))
             idx = all_mods.index(self.from_mod) if self.from_mod in all_mods else 0
             for m in all_mods[:idx]:
-                if not self.state.is_done(m):
-                    self.state.mark(m, "skipped")
+                self.state.mark(m, "skipped")
+                self.state.save()
 
         # Resolve execution order
         order = self._resolve_order(enabled)
