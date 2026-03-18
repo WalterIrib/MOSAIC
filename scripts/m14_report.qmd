@@ -1,0 +1,2362 @@
+---
+title: "MOSAIC — Multi-Omic Analysis of Small-RNA, AI-assisted Integration and Characterization"
+subtitle: "Comprehensive RNA-seq Analysis Report"
+date: today
+author: "MOSAIC Pipeline v0.7"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 4
+    toc-location: left
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    self-contained: true
+    fig-width: 9
+    fig-height: 5.5
+    df-print: paged
+    include-in-header:
+      text: |
+        <style>
+        .slider-container { margin:10px 0; padding:8px;
+          background:#f8f9fa; border-radius:6px; display:inline-block; }
+        .slider-container label { font-weight:600; margin-right:8px; }
+        input[type=range] { vertical-align:middle; }
+        .topN-val { font-weight:700; color:#2471A3; }
+        .table-scroll { max-height:420px; overflow-y:auto; display:block; }
+        caption { caption-side:bottom; font-size:0.85em;
+                  color:#555; text-align:left; padding-top:4px; }
+        </style>
+execute:
+  echo: false
+  warning: false
+  message: false
+params:
+  out_dir:        "/home/walter/Desktop/mosaic_output"
+  comparison:     "tumor_vs_normal"
+  treatment:      "tumor"
+  control:        "normal"
+  lfc_threshold:  1.0
+  padj_threshold: 0.05
+---
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(ggplot2); library(dplyr); library(tidyr)
+  library(scales);  library(knitr); library(kableExtra)
+  library(stringr); library(gridExtra); library(ggrepel)
+})
+if (requireNamespace("pheatmap",quietly=TRUE)) library(pheatmap)
+if (requireNamespace("scales",  quietly=TRUE)) library(scales)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+safe_read <- function(path, ...) {
+  if (!is.null(path) && file.exists(path))
+    tryCatch(read.table(path, header=TRUE, sep="\t",
+                        check.names=FALSE, ...), error=function(e) NULL)
+  else NULL
+}
+
+go_bar <- function(go_df, title, fill_low, fill_high, n=20, padj_thr=0.05) {
+  if (is.null(go_df) || !any(go_df$p.adjust < padj_thr, na.rm=TRUE)) {
+    cat("No significant terms at padj <", padj_thr, "\n")
+    return(invisible(NULL))
+  }
+  go_df |> filter(p.adjust < padj_thr) |> arrange(p.adjust) |> head(n) |>
+    mutate(neg_lp = pmin(-log10(p.adjust), 50),
+           Description = str_trunc(Description, 55)) |>
+    ggplot(aes(x=reorder(Description, neg_lp), y=neg_lp, fill=neg_lp)) +
+    geom_col(show.legend=FALSE) +
+    geom_text(aes(label=GeneRatio), hjust=-0.1, size=2.8) +
+    coord_flip() +
+    scale_fill_gradient(low=fill_low, high=fill_high) +
+    scale_y_continuous(expand=expansion(mult=c(0,0.25))) +
+    labs(title=title, x=NULL, y="-log10(BH-adjusted p-value)") +
+    theme_minimal(base_size=10)
+}
+
+# ── Parameters ────────────────────────────────────────────────────────────────
+p       <- params
+out     <- p$out_dir
+comp    <- p$comparison
+lfc_thr <- p$lfc_threshold
+padj_thr<- p$padj_threshold
+
+# ── Palette ───────────────────────────────────────────────────────────────────
+col_up   <- "#E74C3C"
+col_down <- "#3498DB"
+col_ns   <- "#BDC3C7"
+col_cond <- setNames(c("#2ECC71","#E74C3C"), c(p$control, p$treatment))
+col_macro <- c(
+  "SINE"          = "#3498DB",
+  "LINE"          = "#E74C3C",
+  "LTR/ERV"       = "#2ECC71",
+  "DNA transposon"= "#F39C12",
+  "SVA"           = "#9B59B6",
+  "Satellite"     = "#1ABC9C",
+  "Other TE"      = "#95A5A6"
+)
+
+# ── Load data ─────────────────────────────────────────────────────────────────
+norm_counts <- safe_read(file.path(out,"deseq2","normalized_counts.tsv"),
+                          row.names=1)
+de_genes    <- safe_read(file.path(out,"deseq2",
+                          sprintf("genes_%s_DE.tsv", comp)))
+te_counts   <- safe_read(file.path(out,"integrated","te_counts_clean.tsv"))
+sat_counts  <- safe_read(file.path(out,"integrated","satellite_counts_clean.tsv"))
+te_de       <- safe_read(file.path(out,"deseq2",
+                          sprintf("TE_%s_DE.tsv", comp)))
+gene_map    <- safe_read(file.path(out,"integrated","gene_type_map.tsv"))
+coldata     <- safe_read("/tmp/coldata.tsv")
+circ_annot  <- safe_read(file.path(out,"circrna_merged","circrna_annotation.tsv"))
+circ_counts <- safe_read(file.path(out,"circrna_merged","circrna_counts.tsv"))
+circ_de     <- safe_read(file.path(out,"circrna_merged","circrna_DE_wilcoxon.tsv"))
+te_host     <- safe_read(file.path(out,"m11","te_host_genes.tsv"))
+tet_sig     <- safe_read(file.path(out,"m12",
+                          sprintf("%s_sigdiff_gene_TE.txt", comp)))
+trim_stats  <- safe_read(file.path(out,"trimmed","trim_stats.tsv"))
+strand_df   <- safe_read(file.path(out,"mapping","strandedness.tsv"))
+
+# QC plots from M08b
+pca_coords    <- safe_read(file.path(out, "deseq2/pca_coordinates.tsv"))
+tpm_counts    <- safe_read(file.path(out, "deseq2/tpm_counts.tsv"))
+
+# M11b promoter TE
+te_prom_genes   <- safe_read(file.path(out, "m11b/te_promoter_genes.tsv"))
+te_prom_summary <- safe_read(file.path(out, "m11b/te_promoter_summary.tsv"))
+
+# M11c TE age
+te_age_summary  <- safe_read(file.path(out, "m11c/te_age_summary.tsv"))
+te_age_de_tbl   <- safe_read(file.path(out, "m11c/te_age_de_table.tsv"))
+
+# M11d DE-TE integration
+de_te_integrated   <- safe_read(file.path(out, "m11d/de_te_integrated.tsv"))
+te_enrich_fisher   <- safe_read(file.path(out, "m11d/te_enrichment_fisher.tsv"))
+macro_enrich       <- safe_read(file.path(out, "m11d/promoter_te_macro_enrichment.tsv"))
+go_prom_te_bp      <- safe_read(file.path(out, "m11d/go_prom_TE_DE_BP.tsv"))
+go_prom_te_mf      <- safe_read(file.path(out, "m11d/go_prom_TE_DE_MF.tsv"))
+go_body_te_bp      <- safe_read(file.path(out, "m11d/go_body_TE_DE_BP.tsv"))
+
+# M16 StringTie de novo
+st_summary      <- safe_read(file.path(out, "m16_stringtie/stringtie_summary.tsv"))
+st_class_codes  <- safe_read(file.path(out, "m16_stringtie/class_code_summary.tsv"))
+novel_de        <- safe_read(file.path(out, "m16_stringtie/novel_transcript_DE.tsv"))
+novel_fpkm      <- safe_read(file.path(out, "m16_stringtie/novel_transcript_fpkm.tsv"))
+
+# M17 rMATS splicing
+splicing_summary<- safe_read(file.path(out, "m17_rmats/splicing_summary.tsv"))
+sig_splicing    <- safe_read(file.path(out, "m17_rmats/significant_splicing_events.tsv"))
+top_se          <- safe_read(file.path(out, "m17_rmats/top_SE_events.tsv"))
+top_a3ss        <- safe_read(file.path(out, "m17_rmats/top_A3SS_events.tsv"))
+top_a5ss        <- safe_read(file.path(out, "m17_rmats/top_A5SS_events.tsv"))
+top_mxe         <- safe_read(file.path(out, "m17_rmats/top_MXE_events.tsv"))
+top_ri          <- safe_read(file.path(out, "m17_rmats/top_RI_events.tsv"))
+spliced_de      <- safe_read(file.path(out, "m17_rmats/spliced_and_de_overlap.tsv"))
+
+# M19 RNA editing
+editing_sites   <- safe_read(file.path(out, "m19_editing/editing_sites_ato_i.tsv"))
+editing_summary <- safe_read(file.path(out, "m19_editing/editing_summary.tsv"))
+editing_per_gene<- safe_read(file.path(out, "m19_editing/editing_per_gene.tsv"))
+
+# M20 Metatranscriptomics
+meta_summary    <- safe_read(file.path(out, "m20_metatranscriptomics/kraken2_classification_summary.tsv"))
+meta_abund      <- safe_read(file.path(out, "m20_metatranscriptomics/microbial_abundance_matrix.tsv"))
+meta_diff       <- safe_read(file.path(out, "m20_metatranscriptomics/microbial_differential_abundance.tsv"))
+meta_diversity  <- safe_read(file.path(out, "m20_metatranscriptomics/alpha_diversity.tsv"))
+
+# M23 TE somatic insertions
+te_clusters     <- tryCatch(
+  read.table(file.path(out, "m23_te_insertions/te_insertion_clusters.tsv"),
+             header=TRUE, sep="\t", stringsAsFactors=FALSE, fill=TRUE,
+             check.names=FALSE, quote=""),
+  error=function(e) NULL)
+te_somatic      <- safe_read(file.path(out, "m23_te_insertions/somatic_te_insertions.tsv"))
+te_ins_summary  <- safe_read(file.path(out, "m23_te_insertions/insertion_summary.tsv"))
+
+# M20b HUMAnN3 functional profiling
+humann_paths   <- safe_read(file.path(out, "m20_metatranscriptomics/humann3/all_pathabundance_cpm.tsv"),
+                             comment.char="#")
+humann_genes   <- safe_read(file.path(out, "m20_metatranscriptomics/humann3/all_genefamilies.tsv"),
+                             comment.char="#")
+
+# M15 fusions
+fusion_merged   <- safe_read(file.path(out, "m15_fusions/fusions_merged.tsv"))
+
+# M18 network
+string_hubs     <- safe_read(file.path(out, "m18/string_hub_genes.tsv"))
+wgcna_modules   <- safe_read(file.path(out, "m18/wgcna_module_genes.tsv"))
+wgcna_mt_cor    <- safe_read(file.path(out, "m18/wgcna_module_trait_correlation.tsv"))
+
+# GO files
+# GO — canonical genes UP / DOWN / ALL
+go_up_bp   <- safe_read(file.path(out,"go","genes_UP_GO_BP.tsv"))
+go_up_mf   <- safe_read(file.path(out,"go","genes_UP_GO_MF.tsv"))
+go_up_cc   <- safe_read(file.path(out,"go","genes_UP_GO_CC.tsv"))
+go_up_kegg <- safe_read(file.path(out,"go","genes_UP_KEGG.tsv"))
+go_up_do   <- safe_read(file.path(out,"go","genes_UP_DO.tsv"))
+go_dn_bp   <- safe_read(file.path(out,"go","genes_DOWN_GO_BP.tsv"))
+go_dn_mf   <- safe_read(file.path(out,"go","genes_DOWN_GO_MF.tsv"))
+go_dn_cc   <- safe_read(file.path(out,"go","genes_DOWN_GO_CC.tsv"))
+go_dn_kegg <- safe_read(file.path(out,"go","genes_DOWN_KEGG.tsv"))
+go_dn_do   <- safe_read(file.path(out,"go","genes_DOWN_DO.tsv"))
+go_all_bp  <- safe_read(file.path(out,"go","genes_ALL_GO_BP.tsv"))
+go_all_mf  <- safe_read(file.path(out,"go","genes_ALL_GO_MF.tsv"))
+go_all_cc  <- safe_read(file.path(out,"go","genes_ALL_GO_CC.tsv"))
+go_all_kegg<- safe_read(file.path(out,"go","genes_ALL_KEGG.tsv"))
+go_all_do  <- safe_read(file.path(out,"go","genes_ALL_DO.tsv"))
+# GO — TE host genes
+go_te_bp <- safe_read(file.path(out,"go","TE_host_GO_BP.tsv"))
+go_te_mf <- safe_read(file.path(out,"go","TE_host_GO_MF.tsv"))
+go_te_cc <- safe_read(file.path(out,"go","TE_host_GO_CC.tsv"))
+
+# ── Sample / condition maps ───────────────────────────────────────────────────
+sample_ids <- if (!is.null(coldata)) coldata$sample_id else character(0)
+conditions <- if (!is.null(coldata)) {
+  setNames(coldata$condition, coldata$sample_id)
+} else character(0)
+
+# ── Gene name lookup ──────────────────────────────────────────────────────────
+gene_names <- if (!is.null(gene_map)) {
+  setNames(gene_map$gene_name, gene_map$gene_id)
+} else character(0)
+
+# ── DE significant subsets ────────────────────────────────────────────────────
+de_sig <- if (!is.null(de_genes)) {
+  de_genes[!is.na(de_genes$padj) &
+           de_genes$padj < padj_thr &
+           abs(de_genes$log2FoldChange) > lfc_thr, ]
+} else data.frame()
+
+te_sig <- if (!is.null(te_de)) {
+  te_de[!is.na(te_de$padj) & te_de$padj < padj_thr, ]
+} else data.frame()
+```
+
+# Executive Summary {.unnumbered}
+
+```{r summary-box}
+n_pc  <- if (!is.null(gene_map)) sum(gene_map$gene_type=="protein_coding") else "N/A"
+n_lnc <- if (!is.null(gene_map)) sum(gene_map$gene_type=="lncRNA") else "N/A"
+n_te  <- if (!is.null(te_counts))  nrow(te_counts)  else "N/A"
+n_sat <- if (!is.null(sat_counts)) nrow(sat_counts) else "N/A"
+n_circ<- if (!is.null(circ_counts)) nrow(circ_counts) else 0
+n_circ_sig <- if (!is.null(circ_de)) {
+  sum(!is.na(circ_de$padj) & circ_de$padj<padj_thr &
+      abs(circ_de$log2FoldChange)>lfc_thr)
+} else 0
+
+data.frame(
+  Category  = c("Protein-coding genes quantified","lncRNA genes quantified",
+                "TE families detected","Satellite families detected",
+                "circRNA loci detected","DE genes — canonical",
+                "DE TE families","DE circRNA loci"),
+  Count     = c(format(n_pc,big.mark=","), format(n_lnc,big.mark=","),
+                format(n_te,big.mark=","),  format(n_sat,big.mark=","),
+                format(n_circ,big.mark=","),
+                nrow(de_sig), nrow(te_sig), n_circ_sig),
+  Threshold = c("","","","","",
+                sprintf("padj<%.2f & |LFC|>%.1f", padj_thr, lfc_thr),
+                sprintf("padj<%.2f", padj_thr),
+                sprintf("padj<%.2f & |LFC|>%.1f", padj_thr, lfc_thr))
+) |>
+  kable(caption=sprintf("MOSAIC analysis summary — %s vs %s",
+                        p$treatment, p$control)) |>
+  kable_styling(bootstrap_options=c("striped","hover","condensed"),
+                full_width=FALSE) |>
+  row_spec(6:8, background="#EBF5FB")
+```
+
+---
+
+# Quality Control
+
+## Trimming (fastp)
+
+```{r qc-trim}
+if (!is.null(trim_stats)) {
+  trim_stats |>
+    mutate(pct_kept=round(reads_after/reads_before*100,1)) |>
+    select(sample_id, condition, reads_before, reads_after, pct_kept,
+           any_of(c("q30_rate","mean_len_r1"))) |>
+    kable(caption="Per-sample trimming statistics (fastp). Adapter auto-detection; Q20 quality filter; minimum length 36bp. pct_kept: fraction of reads passing all filters.") |>
+    kable_styling(bootstrap_options=c("striped","hover","condensed"))
+}
+```
+
+## Mapping (STAR two-pass)
+
+```{r qc-map}
+if (!is.null(strand_df)) {
+  kable(strand_df,
+        caption="Per-sample STAR mapping rates and strandedness inference (RSeQC infer_experiment.py). featureCounts was run with the consensus strandedness setting.") |>
+    kable_styling(bootstrap_options=c("striped","hover","condensed"))
+}
+```
+
+## Sample QC — PCA and Correlation
+
+```{r pca-plot, fig.height=5, fig.width=7, fig.cap="PCA of samples based on top 500 most variable genes (log2 normalised counts). PC1 and PC2 percentages indicate variance explained. Samples coloured by condition."}
+if (!is.null(pca_coords)) {
+  ggplot(pca_coords, aes(x=PC1, y=PC2, color=condition, label=sample_id)) +
+    geom_point(size=5, alpha=0.9) +
+    ggrepel::geom_text_repel(size=3.5, show.legend=FALSE) +
+    scale_color_manual(values=col_cond, na.value="grey60") +
+    labs(title="PCA — Top 500 most variable genes",
+         x=paste0("PC1 (", round(var(pca_coords$PC1)/sum(apply(pca_coords[,c("PC1","PC2")],2,var))*100,1),"%)"),
+         y="PC2", color="Condition") +
+    theme_minimal(base_size=13) + theme(legend.position="top")
+} else {
+  cat("PCA not available — run m08b_qc_plots.R first
+")
+}
+```
+
+```{r corr-heatmap, fig.height=5, fig.width=6, fig.cap="Sample-sample Pearson correlation matrix based on log2 normalised counts. Values close to 1 indicate high similarity; replicates within the same condition should cluster together."}
+if (!is.null(norm_counts) && ncol(norm_counts) >= 2) {
+  nc_log <- log2(as.matrix(norm_counts) + 1)
+  cor_mat <- cor(nc_log, method="pearson")
+
+  ann_df <- data.frame(Condition=conditions[colnames(cor_mat)],
+                       row.names=colnames(cor_mat))
+  ann_colors <- list(Condition=col_cond[unique(ann_df$Condition)])
+  ann_colors$Condition <- ann_colors$Condition[!is.na(ann_colors$Condition)]
+
+  pheatmap::pheatmap(
+    cor_mat,
+    color=colorRampPalette(c("#2C3E50","#85C1E9","white"))(100),
+    annotation_col=ann_df, annotation_row=ann_df,
+    annotation_colors=ann_colors,
+    display_numbers=TRUE, number_format="%.3f", fontsize_number=9,
+    main="Sample-sample Pearson correlation"
+  )
+} else {
+  cat("Correlation heatmap not available
+")
+}
+```
+
+## Expression by RNA Biotype and Condition
+
+<div style="margin:8px 0">
+  <button onclick="
+    var lin=document.getElementById('rna-linear');
+    var log=document.getElementById('rna-log');
+    if(log.style.display==='none'){
+      log.style.display=''; lin.style.display='none';
+      this.textContent='Switch to linear scale';
+    } else {
+      lin.style.display=''; log.style.display='none';
+      this.textContent='Switch to log10 scale';
+    }"
+    style="padding:5px 14px;border-radius:4px;border:1px solid #2471A3;
+           background:#EBF5FB;cursor:pointer;font-size:0.9em">
+    Switch to log10 scale
+  </button>
+</div>
+
+```{r rna-landscape-data, include=FALSE}
+# ── Data prep for RNA biotype composition plots ───────────────────────────────
+classify_bt <- function(gt) case_when(
+  gt=="protein_coding"                               ~ "Protein-coding",
+  gt=="lncRNA"                                       ~ "lncRNA",
+  grepl("pseudogene",gt)                             ~ "Pseudogene",
+  gt %in% c("miRNA","snRNA","snoRNA","scaRNA","rRNA")~ "Small RNA",
+  gt=="misc_RNA"                                     ~ "misc_RNA",
+  gt=="TEC"                                          ~ "TEC",
+  grepl("^IG_|^TR_", gt)                             ~ "IG/TR genes",
+  TRUE                                               ~ "Unannotated"
+)
+classify_macro <- function(fid) case_when(
+  grepl("^Alu|^MIR|SINE",    fid, ignore.case=TRUE) ~ "SINE (Alu/MIR)",
+  grepl("^L1|^L2|^CR1|LINE", fid, ignore.case=TRUE) ~ "LINE (L1/L2)",
+  grepl("^LTR|^MLT|^THE|^MER[0-9]|^HERV|^ERV|LTR",
+        fid, ignore.case=TRUE)                       ~ "LTR/ERV",
+  grepl("^Tigger|^Charlie|^hAT|^Mariner|^MER[A-Z]|DNA",
+        fid, ignore.case=TRUE)                       ~ "DNA transposon",
+  grepl("^SVA", fid, ignore.case=TRUE)               ~ "SVA",
+  TRUE                                               ~ "Other TE"
+)
+
+rna_plot_data <- NULL
+if (!is.null(norm_counts) && !is.null(gene_map) && length(conditions)>0) {
+  cat_map_vec <- setNames(classify_bt(gene_map$gene_type), gene_map$gene_id)
+  common_g    <- intersect(rownames(norm_counts), names(cat_map_vec))
+  sids        <- intersect(colnames(norm_counts), names(conditions))
+
+  make_pct_summ <- function(rows_list) {
+    bind_rows(rows_list) |>
+      pivot_longer(-category, names_to="sample_id", values_to="total") |>
+      filter(sample_id %in% names(conditions)) |>
+      group_by(sample_id) |> mutate(pct=total/sum(total)*100) |> ungroup() |>
+      mutate(condition=conditions[sample_id]) |>
+      group_by(category, condition) |>
+      summarise(mean_pct=mean(pct), sd_pct=sd(pct), .groups="drop")
+  }
+
+  bt_totals <- norm_counts[common_g, sids, drop=FALSE] |>
+    as.data.frame() |> tibble::rownames_to_column("gene_id") |>
+    mutate(cat=cat_map_vec[gene_id]) |> filter(!is.na(cat)) |>
+    group_by(cat) |> summarise(across(all_of(sids), sum), .groups="drop") |>
+    rename(category=cat)
+
+  rs_vec <- setNames(rep(0.0,length(sids)), sids)
+  for (d in list(te_counts, sat_counts)) {
+    if (!is.null(d)) {
+      nc <- sapply(d,is.numeric); sc <- intersect(colnames(d)[nc],sids)
+      if (length(sc)>0) rs_vec[sc] <- rs_vec[sc] + colSums(d[,sc,drop=FALSE])
+    }
+  }
+  rs_agg <- data.frame(category="RS (TE+Satellite)", as.data.frame(t(rs_vec)))
+
+  # Microbial reads from M20 (Kraken2 classified, non-human)
+  # Use meta_summary: total classified reads minus Homo sapiens
+  micro_agg <- NULL
+  if (!is.null(meta_summary) && "total_reads" %in% colnames(meta_summary)) {
+    micro_vec <- setNames(rep(0.0, length(sids)), sids)
+    for (i in seq_len(nrow(meta_summary))) {
+      sid <- meta_summary$sample_id[i]
+      if (sid %in% sids) {
+        # Microbial = classified reads (already excludes unclassified)
+        # We use classified count as proxy for microbial signal
+        # (Homo sapiens in this context = reads mapping back to human from unmapped)
+        micro_vec[sid] <- as.numeric(meta_summary$classified[i])
+      }
+    }
+    if (sum(micro_vec) > 0)
+      micro_agg <- data.frame(category="Microbial",
+                               as.data.frame(t(micro_vec)))
+  }
+
+  circ_agg <- NULL
+  if (!is.null(circ_counts)) {
+    nc <- sapply(circ_counts,is.numeric); sc <- intersect(colnames(circ_counts)[nc],sids)
+    if (length(sc)>0)
+      circ_agg <- data.frame(category="circRNA",
+                              as.data.frame(t(colSums(circ_counts[,sc,drop=FALSE]))))
+  }
+
+  pct_agg <- make_pct_summ(c(
+    split(bt_totals, bt_totals$category) |>
+      lapply(function(x){x$category<-x$category[1];x}),
+    list(rs_agg, circ_agg, micro_agg)
+  ))
+  cat_ord_a <- c("Protein-coding","lncRNA","Pseudogene","Small RNA",
+                 "misc_RNA","TEC","IG/TR genes","Unannotated","Microbial",
+                 "RS (TE+Satellite)","circRNA")
+  pct_agg$category <- factor(pct_agg$category,
+    levels=rev(cat_ord_a[cat_ord_a %in% pct_agg$category]))
+
+  # Detail rows (no protein-coding)
+  detail_rows <- list()
+  for (cat_nm in c("lncRNA","Pseudogene","Small RNA","misc_RNA","TEC","IG/TR genes","Unannotated")) {
+    gs <- intersect(names(cat_map_vec)[cat_map_vec==cat_nm], rownames(norm_counts))
+    if (length(gs)>0) {
+      tv <- colSums(norm_counts[gs, sids, drop=FALSE])
+      detail_rows[[cat_nm]] <- data.frame(category=cat_nm, as.data.frame(t(tv)))
+    }
+  }
+  if (!is.null(te_counts)) {
+    nc <- sapply(te_counts,is.numeric); sc <- intersect(colnames(te_counts)[nc],sids)
+    fids <- te_counts[,1]
+    for (mac in unique(classify_macro(fids))) {
+      sel <- classify_macro(fids)==mac
+      if (any(sel)&&length(sc)>0) {
+        tv <- colSums(te_counts[sel,sc,drop=FALSE])
+        detail_rows[[mac]] <- data.frame(category=mac, as.data.frame(t(tv)))
+      }
+    }
+  }
+  if (!is.null(sat_counts)) {
+    nc <- sapply(sat_counts,is.numeric); sc <- intersect(colnames(sat_counts)[nc],sids)
+    if (length(sc)>0) {
+      tv <- colSums(sat_counts[,sc,drop=FALSE])
+      detail_rows[["Satellite"]] <- data.frame(category="Satellite", as.data.frame(t(tv)))
+    }
+  }
+  if (!is.null(circ_counts)) {
+    nc <- sapply(circ_counts,is.numeric); sc <- intersect(colnames(circ_counts)[nc],sids)
+    if (length(sc)>0) {
+      tv <- colSums(circ_counts[,sc,drop=FALSE])
+      detail_rows[["circRNA"]] <- data.frame(category="circRNA", as.data.frame(t(tv)))
+    }
+  }
+  pct_det <- make_pct_summ(detail_rows)
+  cat_ord_b <- pct_det |> group_by(category) |>
+    summarise(m=mean(mean_pct)) |> arrange(desc(m)) |> pull(category)
+  pct_det$category <- factor(pct_det$category, levels=rev(cat_ord_b))
+
+  rna_plot_data <- list(pct_agg=pct_agg, pct_det=pct_det)
+}
+
+make_rna_panel <- function(df, log_scale, fmt, title, y_label) {
+  max_y <- max(df$mean_pct + df$sd_pct, na.rm=TRUE)
+  p <- ggplot(df, aes(x=category, y=pmax(mean_pct,1e-6), fill=condition)) +
+    geom_col(position=position_dodge(0.8), width=0.7) +
+    geom_errorbar(
+      aes(ymin=pmax(mean_pct-sd_pct,1e-6), ymax=pmax(mean_pct+sd_pct,1e-6)),
+      position=position_dodge(0.8), width=0.3, linewidth=0.4) +
+    coord_flip() +
+    scale_fill_manual(values=col_cond) +
+    labs(title=title, x=NULL, y=y_label, fill=NULL) +
+    theme_minimal(base_size=11) + theme(legend.position="top")
+  if (log_scale) {
+    p + scale_y_log10(
+          breaks=c(1e-5,1e-4,1e-3,0.01,0.1,1,10,100),
+          labels=c("0.00001%","0.0001%","0.001%","0.01%","0.1%","1%","10%","100%"),
+          expand=expansion(mult=c(0,0.55))) +
+      geom_text(aes(y=pmax(mean_pct+sd_pct,1e-5)*2,
+                    label=sprintf(fmt, mean_pct)),
+                position=position_dodge(0.8), hjust=0, size=3.2)
+  } else {
+    p + scale_y_continuous(
+          labels=function(x) paste0(x,"%"),
+          expand=expansion(mult=c(0,0.45))) +
+      geom_text(aes(y=pmax(mean_pct+sd_pct,mean_pct*1.02) + max_y*0.02,
+                    label=sprintf(fmt, mean_pct)),
+                position=position_dodge(0.8), hjust=0, size=3.2)
+  }
+}
+```
+
+<div style="margin:8px 0">
+  <button id="rna-toggle-btn" onclick="
+    var lin=document.getElementById('rna-linear');
+    var log=document.getElementById('rna-log');
+    if(log.style.display==='none'){
+      log.style.display=''; lin.style.display='none';
+      this.textContent='Switch to linear scale';
+    } else {
+      lin.style.display=''; log.style.display='none';
+      this.textContent='Switch to log10 scale';
+    }"
+    style="padding:5px 14px;border-radius:4px;border:1px solid #2471A3;
+           background:#EBF5FB;cursor:pointer;font-size:0.9em">
+    Switch to log10 scale
+  </button>
+</div>
+
+<div id="rna-linear">
+```{r rna-landscape-linear, fig.height=11, fig.width=9, fig.cap="Transcriptome composition — percentage of total normalised counts per RNA biotype and condition (linear scale). Left button toggles to log10. Top panel: all biotypes including protein-coding. Bottom panel: detail excluding protein-coding, with RS split by TE macrocategory. Error bars: SD across samples within condition. Biotypes from GENCODE v49; RS from DFAM 3.9 pseudochromosomes; circRNA from CIRI2."}
+if (!is.null(rna_plot_data)) {
+  p1 <- make_rna_panel(rna_plot_data$pct_agg, FALSE, "%.1f%%",
+                        "All biotypes (linear scale)",
+                        "% of total normalised counts")
+  p2 <- make_rna_panel(rna_plot_data$pct_det, FALSE, "%.4f%%",
+                        "Detail — excl. protein-coding (linear scale)",
+                        "% of total normalised counts")
+  grid.arrange(p1, p2, nrow=2)
+}
+```
+</div>
+
+<div id="rna-log" style="display:none">
+```{r rna-landscape-log, fig.height=11, fig.width=9, fig.cap="Transcriptome composition — log10 scale. Same data as linear panel; log10 scale reveals low-abundance biotypes (misc_RNA, TEC, IG/TR, satellite, circRNA) that are invisible on linear scale."}
+if (!is.null(rna_plot_data)) {
+  p1 <- make_rna_panel(rna_plot_data$pct_agg, TRUE, "%.1f%%",
+                        "All biotypes (log10 scale)",
+                        "% of total normalised counts (log10)")
+  p2 <- make_rna_panel(rna_plot_data$pct_det, TRUE, "%.4f%%",
+                        "Detail — excl. protein-coding (log10 scale)",
+                        "% of total normalised counts (log10)")
+  grid.arrange(p1, p2, nrow=2)
+}
+```
+</div>
+---
+
+# Differential Expression — Canonical Genes
+
+## Summary
+
+```{r de-summary}
+if (!is.null(de_genes)) {
+  n_up   <- sum(!is.na(de_genes$padj) & de_genes$padj<padj_thr &
+                de_genes$log2FoldChange > lfc_thr)
+  n_down <- sum(!is.na(de_genes$padj) & de_genes$padj<padj_thr &
+                de_genes$log2FoldChange < -lfc_thr)
+  cat(sprintf(
+    "Tested: **%s** genes  |  Up: **%d**  |  Down: **%d**  |  Not significant: **%d**\n\n",
+    format(nrow(de_genes),big.mark=","), n_up, n_down,
+    nrow(de_genes)-n_up-n_down))
+}
+```
+
+## Volcano Plot
+
+```{r volcano, fig.cap="Volcano plot of canonical gene differential expression (DESeq2). Each point is one gene. LFC values are ashr-shrunken. Top differentially expressed genes (by |LFC| × -log10(padj)) are labelled with their gene symbol. Dashed lines: LFC and padj thresholds."}
+if (!is.null(de_genes) && nrow(de_genes)>0) {
+  de_plot <- de_genes |>
+    filter(!is.na(padj), !is.na(log2FoldChange)) |>
+    mutate(
+      neg_lp  = pmin(-log10(padj + 1e-300), 50),
+      lfc_cap = pmax(pmin(log2FoldChange, 15), -15),
+      status  = case_when(
+        padj < padj_thr & log2FoldChange >  lfc_thr ~ "Up",
+        padj < padj_thr & log2FoldChange < -lfc_thr ~ "Down",
+        TRUE ~ "NS"
+      ),
+      gene_name_label = gene_names[gene_id],
+      label_score = abs(log2FoldChange) * neg_lp
+    )
+
+  # Top genes to label
+  top_label <- de_plot |>
+    filter(status != "NS") |>
+    arrange(desc(label_score)) |>
+    head(15)
+  if (nrow(top_label)==0) {
+    top_label <- de_plot |> arrange(desc(label_score)) |> head(15)
+  }
+
+  ggplot(de_plot, aes(x=lfc_cap, y=neg_lp, color=status)) +
+    geom_point(alpha=0.35, size=0.7) +
+    geom_vline(xintercept=c(-lfc_thr, lfc_thr),
+               linetype="dashed", color="grey30", linewidth=0.4) +
+    geom_hline(yintercept=-log10(padj_thr),
+               linetype="dashed", color="grey30", linewidth=0.4) +
+    geom_label_repel(data=top_label,
+                     aes(label=ifelse(!is.na(gene_name_label) &
+                                        gene_name_label!="",
+                                      gene_name_label, gene_id)),
+                     size=2.8, max.overlaps=20,
+                     box.padding=0.3, min.segment.length=0.2,
+                     show.legend=FALSE) +
+    scale_color_manual(
+      values=c("Up"=col_up,"Down"=col_down,"NS"=col_ns),
+      guide=guide_legend(override.aes=list(size=2.5,alpha=1))) +
+    labs(title=sprintf("Volcano — %s vs %s", p$treatment, p$control),
+         x="log2 Fold Change (ashr-shrunken, capped ±15)",
+         y="-log10(BH-adjusted p-value, capped at 50)",
+         color=NULL) +
+    theme_minimal(base_size=12) +
+    theme(legend.position="top")
+}
+```
+
+## DE Genes Heatmap
+
+```{r de-heatmap, fig.height=8, fig.width=7, fig.cap="Heatmap of top 50 differentially expressed genes (z-score of log2 normalised counts). Red = upregulated in treatment; blue = downregulated. Hierarchical clustering reveals co-regulated gene groups."}
+if (!is.null(de_genes) && !is.null(norm_counts)) {
+  top_de <- de_genes |>
+    filter(!is.na(padj), padj < 0.05, abs(log2FoldChange) > 1) |>
+    arrange(padj, desc(abs(log2FoldChange))) |>
+    head(50)
+
+  if (nrow(top_de) < 3) {
+    cat(sprintf("Only %d significant DE genes — heatmap requires at least 3.
+",
+                nrow(top_de)))
+    cat("With full-depth data, this section will show a z-score heatmap of top 50 DE genes.
+")
+  } else {
+    gid_col  <- if ("gene_id" %in% colnames(top_de)) "gene_id" else colnames(top_de)[ncol(top_de)]
+    gids     <- top_de[[gid_col]]
+    nc_log   <- log2(as.matrix(norm_counts) + 1)
+    common_g <- intersect(gids, rownames(nc_log))
+    mat_z    <- t(scale(t(nc_log[common_g,,drop=FALSE])))
+    rownames(mat_z) <- label_gene(rownames(mat_z))
+
+    ann_col <- data.frame(Condition=conditions[colnames(mat_z)], row.names=colnames(mat_z))
+    pheatmap::pheatmap(
+      mat_z,
+      color=colorRampPalette(c("#2980B9","white","#E74C3C"))(100),
+      annotation_col=ann_col,
+      annotation_colors=list(Condition=col_cond[unique(ann_col$Condition)]),
+      main=sprintf("Top %d DE genes (z-score)", nrow(mat_z)),
+      fontsize_row=max(5, 10 - nrow(mat_z)/10)
+    )
+  }
+}
+```
+
+## Top DE Genes
+
+<div class="slider-container">
+  <label for="deN-slider">Table rows:</label>
+  <input type="range" id="deN-slider" min="10" max="100" step="10" value="20"
+    oninput="var n=parseInt(this.value);
+             document.getElementById('deN-val').textContent=n;
+             document.querySelectorAll('.de-row').forEach(function(r,i){
+               r.style.display=i<n?'':'none';})">
+  <span id="deN-val" class="topN-val">20</span> genes
+</div>
+
+```{r top-de-table, results='asis'}
+if (!is.null(de_genes)) {
+  tbl_src <- if (nrow(de_sig)>0) {
+    de_sig |> arrange(padj)
+  } else {
+    de_genes |> arrange(pvalue) |> head(100)
+  }
+
+  tbl_src <- tbl_src |> head(100) |>
+    mutate(gene_name = gene_names[gene_id]) |>
+    select(gene_id, gene_name,
+           any_of(c("baseMean","log2FoldChange","log2FoldChange_shrunk",
+                    "pvalue","padj"))) |>
+    mutate(across(where(is.numeric), ~round(.,4)))
+
+  cap <- if (nrow(de_sig)>0) {
+    sprintf("Significant DE genes (padj<%.2f, |LFC|>%.1f), ordered by padj. gene_name: HGNC symbol. log2FoldChange_shrunk: ashr-shrunken LFC.", padj_thr, lfc_thr)
+  } else {
+    "No significant DE genes at current thresholds. Showing top 100 by unadjusted p-value."
+  }
+
+  rows_html <- apply(tbl_src, 1, function(r) {
+    paste0('<tr class="de-row">',
+           paste0('<td>', r, '</td>', collapse=""), '</tr>')
+  })
+
+  cat(sprintf('<p style="font-size:0.85em;color:#555">%s</p>', cap))
+  cat('<div class="table-scroll"><table class="table table-striped table-hover',
+      ' table-condensed" style="font-size:11px">')
+  cat('<thead><tr>',
+      paste0('<th>', colnames(tbl_src), '</th>', collapse=""),
+      '</tr></thead><tbody>')
+  cat(rows_html, sep="\n")
+  cat('</tbody></table></div>')
+  cat('<script>document.querySelectorAll(".de-row").forEach(function(r,i){
+        if(i>=20) r.style.display="none";});</script>')
+}
+```
+
+---
+
+# Differential Expression — Repetitive Sequences
+
+> **Terminology:** "Repetitive Sequences" (RS) refers to all repeat-derived transcripts quantified by MOSAIC: **Transposable Elements** (TE: LINEs, SINEs, LTR retrotransposons/ERVs, DNA transposons, SVA) and **Satellite sequences** (tandem repeats). Quantification uses DFAM 3.9 consensus pseudochromosomes (Bowtie2) for family-level counts, and RepeatMasker hg38 coordinates (TEtranscripts, pysam) for locus-level analysis.
+
+## Top Expressed TE Families
+
+```{r te-top, fig.height=7, fig.cap="Top expressed TE families ordered by total fragment count (all samples, highest first). Left: combined across all samples. Right: mean fragment counts per condition (mean +/- SD), same family order. Fragment counts: deduplicated junction reads mapped to DFAM 3.9 consensus pseudochromosomes (Bowtie2 --very-sensitive-local)."}
+if (!is.null(te_counts)) {
+  num_cols <- sapply(te_counts, is.numeric)
+  fam_ids  <- te_counts[, 1]
+  te_mat   <- as.matrix(te_counts[, num_cols, drop=FALSE])
+
+  top_te <- data.frame(family_id=fam_ids, total=rowSums(te_mat)) |>
+    arrange(desc(total))
+  top30  <- top_te |> head(30)
+  fam_lev <- rev(top30$family_id)  # factor levels for correct order
+
+  p_all <- ggplot(top30, aes(x=factor(family_id, levels=fam_lev), y=total)) +
+    geom_col(fill="#8E44AD", alpha=0.85) + coord_flip() +
+    scale_y_continuous(labels=comma) +
+    labs(title="All samples combined", x=NULL, y="Total fragment counts") +
+    theme_minimal(base_size=9)
+
+  if (length(conditions)>0) {
+    sids_te <- intersect(colnames(te_mat), names(conditions))
+    te_long <- data.frame(family_id=fam_ids, te_counts[, sids_te, drop=FALSE]) |>
+      pivot_longer(-family_id, names_to="sample_id", values_to="count") |>
+      mutate(condition=conditions[sample_id]) |>
+      filter(family_id %in% top30$family_id)
+
+    te_cond <- te_long |> group_by(family_id, condition) |>
+      summarise(mean_c=mean(count), sd_c=sd(count), .groups="drop") |>
+      mutate(family_id=factor(family_id, levels=fam_lev))
+
+    p_cond <- ggplot(te_cond, aes(x=family_id, y=mean_c+1, fill=condition)) +
+      geom_col(position=position_dodge(width=0.8), width=0.7) +
+      geom_errorbar(aes(ymin=pmax(mean_c-sd_c,0)+1, ymax=mean_c+sd_c+1),
+                    position=position_dodge(width=0.8), width=0.3, linewidth=0.4) +
+      coord_flip() + scale_y_log10(labels=comma) +
+      scale_fill_manual(values=col_cond) +
+      labs(title="Top 30 TE families — mean +/- SD per condition", x=NULL,
+           y="Mean counts+1 (log10)", fill=NULL) +
+      theme_minimal(base_size=9) + theme(legend.position="top")
+
+    print(p_cond)
+  } else {
+    print(p_all)
+  }
+}
+```
+
+```{r te-top-table, results='asis'}
+if (!is.null(te_counts)) {
+  num_cols <- sapply(te_counts, is.numeric)
+  te_mat   <- as.matrix(te_counts[, num_cols, drop=FALSE])
+  fam_ids  <- te_counts[, 1]
+  sids_te  <- colnames(te_mat)
+
+  tbl <- data.frame(family_id=fam_ids,
+                    as.data.frame(te_mat),
+                    total=rowSums(te_mat)) |>
+    arrange(desc(total))
+
+  rows_html <- apply(tbl, 1, function(r) {
+    paste0('<tr class="te-row">',
+           paste0('<td>', r, '</td>', collapse=""), '</tr>')
+  })
+  cat('<div class="table-scroll"><table class="table table-striped table-condensed"',
+      ' style="font-size:11px">')
+  cat('<thead><tr>',
+      paste0('<th>', colnames(tbl), '</th>', collapse=""),
+      '</tr></thead><tbody>')
+  cat(rows_html, sep="\n")
+  cat('</tbody></table></div>')
+  cat('<script>document.querySelectorAll(".te-row").forEach(function(r,i){
+        if(i>=20) r.style.display="none";});</script>')
+}
+```
+
+## TE Expression per Sample and Condition
+
+```{r te-by-condition, fig.height=6, fig.cap="Fragment counts for the top 20 expressed TE families, per sample (left) and as mean per condition (right). Bars are ordered by total expression (highest first). Log10 scale is used given the wide dynamic range of TE family counts. Error bars (right panel): standard deviation across samples within each condition."}
+if (!is.null(te_counts) && length(conditions)>0) {
+  num_cols <- sapply(te_counts, is.numeric)
+  fam_ids  <- te_counts[, 1]
+  sids_te  <- intersect(colnames(te_counts)[num_cols], names(conditions))
+
+  te_long <- data.frame(family_id=fam_ids,
+                         te_counts[, sids_te, drop=FALSE]) |>
+    pivot_longer(-family_id, names_to="sample_id", values_to="count") |>
+    mutate(condition=conditions[sample_id])
+
+  # Top 20 by total (correct order)
+  top20_fam <- te_long |>
+    group_by(family_id) |> summarise(tot=sum(count)) |>
+    slice_max(tot, n=20) |> arrange(desc(tot)) |> pull(family_id)
+
+  te20 <- te_long |> filter(family_id %in% top20_fam) |>
+    mutate(family_id=factor(family_id, levels=rev(top20_fam)))
+
+  p1 <- ggplot(te20, aes(x=family_id, y=count+1, fill=condition)) +
+    geom_col(position="dodge") +
+    coord_flip() +
+    scale_y_log10(labels=comma) +
+    scale_fill_manual(values=col_cond) +
+    labs(title="Per sample", x=NULL, y="Counts+1 (log10)", fill=NULL) +
+    theme_minimal(base_size=8.5) +
+    theme(legend.position="top")
+
+  # Mean ± SD per condition (correct order)
+  te20_summ <- te20 |>
+    group_by(family_id, condition) |>
+    summarise(mean_c=mean(count), sd_c=sd(count), .groups="drop")
+
+  p2 <- ggplot(te20_summ, aes(x=family_id, y=mean_c+1, fill=condition)) +
+    geom_col(position=position_dodge(width=0.8), width=0.7) +
+    geom_errorbar(aes(ymin=pmax(mean_c-sd_c,0)+1, ymax=mean_c+sd_c+1),
+                  position=position_dodge(width=0.8), width=0.3, linewidth=0.5) +
+    coord_flip() +
+    scale_y_log10(labels=comma) +
+    scale_fill_manual(values=col_cond) +
+    labs(title="Mean ± SD per condition", x=NULL,
+         y="Mean counts+1 (log10)", fill=NULL) +
+    theme_minimal(base_size=8.5) +
+    theme(legend.position="top")
+
+  grid.arrange(p1, p2, ncol=2)
+}
+```
+
+## RS Expression by Macrocategory
+
+```{r te-macro, fig.cap="Repetitive sequence (RS) expression aggregated by macrocategory, per condition. Mean ± SD fragment counts per condition. Numbers above bars: distinct families detected. Macrocategory assignment uses DFAM family name heuristics: SINE (Alu, MIR), LINE (L1, L2, CR1), LTR/ERV (HERV, MLT, THE, MER[0-9]), DNA transposon (Tigger, Charlie, hAT, Mariner), SVA (SINE-VNTR-Alu), Satellite (from separate pseudochromosome index). Note: ERV and HERV elements are a subset of the LTR/ERV category."}
+if (!is.null(te_counts) && length(conditions)>0) {
+  num_cols <- sapply(te_counts, is.numeric)
+  fam_ids  <- te_counts[, 1]
+  sids_te  <- intersect(colnames(te_counts)[num_cols], names(conditions))
+
+  classify_macro <- function(fid) case_when(
+    grepl("^Alu|^MIR|SINE",      fid, ignore.case=TRUE) ~ "SINE",
+    grepl("^L1|^L2|^CR1|LINE",   fid, ignore.case=TRUE) ~ "LINE",
+    grepl("^LTR|^MLT|^THE|^MER[0-9]|^HERV|^ERV|LTR",
+          fid, ignore.case=TRUE)                         ~ "LTR/ERV",
+    grepl("^Tigger|^Charlie|^hAT|^Mariner|^MER[A-Z]|DNA",
+          fid, ignore.case=TRUE)                         ~ "DNA transposon",
+    grepl("^SVA",                fid, ignore.case=TRUE)  ~ "SVA",
+    TRUE                                                 ~ "Other TE"
+  )
+
+  te_macro <- data.frame(family_id=fam_ids,
+                          macro=classify_macro(fam_ids),
+                          te_counts[, sids_te, drop=FALSE]) |>
+    pivot_longer(-c(family_id,macro), names_to="sample_id", values_to="count") |>
+    mutate(condition=conditions[sample_id]) |>
+    filter(!is.na(condition))
+
+  # Add satellites
+  if (!is.null(sat_counts)) {
+    sat_num <- sapply(sat_counts, is.numeric)
+    sat_sids <- intersect(colnames(sat_counts)[sat_num], names(conditions))
+    sat_macro <- data.frame(family_id=sat_counts[,1], macro="Satellite",
+                             sat_counts[, sat_sids, drop=FALSE]) |>
+      pivot_longer(-c(family_id,macro), names_to="sample_id", values_to="count") |>
+      mutate(condition=conditions[sample_id]) |>
+      filter(!is.na(condition))
+    te_macro <- bind_rows(te_macro, sat_macro)
+  }
+
+  macro_summ <- te_macro |>
+    group_by(macro, condition, sample_id) |>
+    summarise(s_total=sum(count), n_fam=n_distinct(family_id), .groups="drop") |>
+    group_by(macro, condition) |>
+    summarise(mean_total=mean(s_total), sd_total=sd(s_total),
+              n_fam=mean(n_fam), .groups="drop")
+
+  # Single n label per macro (same across conditions)
+  n_label <- macro_summ |> group_by(macro) |>
+    summarise(n_fam=round(mean(n_fam)), y=max(mean_total+sd_total)*1.15, .groups="drop")
+
+  ggplot(macro_summ,
+         aes(x=reorder(macro,-mean_total), y=mean_total, fill=condition)) +
+    geom_col(position=position_dodge(width=0.8), width=0.7) +
+    geom_errorbar(aes(ymin=pmax(mean_total-sd_total,0),
+                      ymax=mean_total+sd_total),
+                  position=position_dodge(width=0.8),
+                  width=0.3, linewidth=0.5) +
+    geom_text(data=n_label,
+              aes(x=reorder(macro,-y), y=y,
+                  label=paste0("n=",n_fam), fill=NULL),
+              vjust=0, size=3, color="grey30", inherit.aes=FALSE) +
+    scale_y_continuous(labels=comma, expand=expansion(mult=c(0,0.2))) +
+    scale_fill_manual(values=col_cond) +
+    labs(title="RS expression by macrocategory — mean ± SD per condition",
+         subtitle="Numbers above bars = mean distinct families detected",
+         x=NULL, y="Total fragment counts (mean across samples)",
+         fill="Condition") +
+    theme_minimal(base_size=11) +
+    theme(axis.text.x=element_text(angle=25,hjust=1))
+}
+```
+
+## TE Differential Expression
+
+<div class="slider-container">
+  <label for="teDE-slider">Table rows:</label>
+  <input type="range" id="teDE-slider" min="10" max="100" step="10" value="20"
+    oninput="var n=parseInt(this.value);
+             document.getElementById('teDE-val').textContent=n;
+             document.querySelectorAll('.tede-row').forEach(function(r,i){
+               r.style.display=i<n?'':'none';})">
+  <span id="teDE-val" class="topN-val">20</span> families
+  <span style="color:#888;font-size:0.85em">(ordered by p-value)</span>
+</div>
+
+```{r te-de, results='asis'}
+if (!is.null(te_de) && nrow(te_de)>0) {
+  # If all padj values are identical (common with n=2), sort by pvalue
+  all_padj_equal <- length(unique(na.omit(te_de$padj))) <= 2
+  te_show <- te_de |>
+    filter(!is.na(padj)) |>
+    arrange(if(all_padj_equal) pvalue else padj) |>
+    select(family_id, any_of(c("baseMean","log2FoldChange",
+                                "log2FoldChange_shrunk","pvalue","padj"))) |>
+    mutate(across(where(is.numeric),~round(.,4)))
+
+  rows_html <- apply(te_show, 1, function(r) {
+    paste0('<tr class="tede-row">',
+           paste0('<td>', r, '</td>', collapse=""), '</tr>')
+  })
+  cat('<p style="font-size:0.85em;color:#555">TE families ordered by unadjusted p-value when all BH-adjusted p-values are equal (common with n=2 per group; BH correction collapses to a single value). When n is sufficient, families are ordered by padj. DESeq2, independentFiltering=FALSE; size factors from stable canonical genes.</p>')
+  cat('<div class="table-scroll"><table class="table table-striped table-condensed"',
+      ' style="font-size:11px">')
+  cat('<thead><tr>',
+      paste0('<th>', colnames(te_show), '</th>', collapse=""),
+      '</tr></thead><tbody>')
+  cat(rows_html, sep="\n")
+  cat('</tbody></table></div>')
+  cat('<script>document.querySelectorAll(".tede-row").forEach(function(r,i){
+        if(i>=20) r.style.display="none";});</script>')
+}
+```
+
+---
+
+## TE Age Analysis (M11c)
+
+```{r te-age-landscape, fig.height=5, fig.width=10, fig.cap="TE age landscape: distribution of RepeatMasker substitution divergence per macrocategory. Low divergence = recently inserted (young/active); high divergence = ancient insertions. SVA elements show the youngest profile, consistent with ongoing retrotransposition in humans."}
+if (!is.null(te_age_summary)) {
+  te_age_summary |>
+    mutate(macro=reorder(macro, mean_div)) |>
+    ggplot(aes(x=macro, y=mean_div, fill=macro)) +
+    geom_col(show.legend=FALSE, alpha=0.85) +
+    geom_errorbar(aes(ymin=mean_div-sd_div, ymax=mean_div+sd_div),
+                  width=0.3, linewidth=0.5) +
+    geom_text(aes(label=sprintf("%.1f%%", mean_div)),
+              hjust=-0.2, size=3.5) +
+    coord_flip() +
+    scale_fill_manual(values=col_macro) +
+    scale_y_continuous(expand=expansion(mult=c(0,0.2))) +
+    labs(title="Mean divergence from TE consensus sequence by macrocategory",
+         subtitle="Proxy for insertion age: lower = younger/more recently active",
+         x=NULL, y="Mean divergence from consensus (%)") +
+    theme_minimal(base_size=12)
+} else {
+  cat("TE age data not available — run M11c first.
+")
+}
+```
+
+```{r te-age-de, fig.height=6, fig.width=9, fig.cap="Correlation between TE family age (mean divergence from consensus) and differential expression (log2FC tumor vs normal). Point size proportional to number of genomic loci. Labels indicate families with significant expression changes."}
+if (!is.null(te_age_de_tbl) && nrow(te_age_de_tbl) >= 5) {
+  lfc_col  <- grep("log2", colnames(te_age_de_tbl), value=TRUE)[1]
+  pval_col <- if ("pvalue" %in% colnames(te_age_de_tbl)) "pvalue" else "padj"
+
+  te_age_de_tbl |>
+    rename(lfc=all_of(lfc_col), pval=all_of(pval_col)) |>
+    mutate(sig=pval < 0.05,
+           label=ifelse(sig & abs(lfc) > 1, family_id, NA)) |>
+    ggplot(aes(x=mean_div, y=lfc, color=macro, size=n_loci)) +
+    geom_point(alpha=0.7) +
+    geom_hline(yintercept=0, linetype="dashed", color="grey50") +
+    ggrepel::geom_text_repel(aes(label=label), size=2.8,
+                              max.overlaps=15, show.legend=FALSE) +
+    scale_color_manual(values=col_macro) +
+    scale_size_continuous(range=c(2,8), name="# loci") +
+    labs(title="TE age vs expression change",
+         x="Mean divergence from consensus (%) — proxy for age",
+         y=sprintf("log2FC (%s / %s)", p$treatment, p$control),
+         color="TE class") +
+    theme_minimal(base_size=12)
+} else {
+  cat("TE age vs DE data not available or insufficient families.
+")
+}
+```
+
+# GO and Pathway Enrichment
+
+> Over-Representation Analysis (ORA, clusterProfiler). Background universe for canonical genes: all expressed genes (baseMean>0). Background for TE host genes: genes with ≥1 expressed TE locus in their gene body (RepeatMasker M11 intersection — 51,934 genes), providing a TE-specific unbiased background. Multiple testing: Benjamini-Hochberg (BH). Gene set size: 10–500.
+
+## Canonical Genes — GO and Pathway Enrichment
+
+> GO and pathway ORA (Over-Representation Analysis) run separately on **up-regulated** genes, **down-regulated** genes, and **all DE genes** combined. Select the tab of interest. Background universe = all expressed genes (baseMean > 5). BH-adjusted p-value threshold shown in each plot.
+
+::: {.panel-tabset}
+
+### UP-regulated — BP
+
+```{r go-up-bp, fig.cap="GO Biological Process terms enriched among UP-regulated canonical genes."}
+go_bar(go_up_bp,
+       sprintf("GO BP - up-regulated (%s vs %s)", p$treatment, p$control),
+       "#85C1E9","#1A5276", padj_thr=padj_thr)
+```
+
+### UP-regulated — MF
+
+```{r go-up-mf}
+go_bar(go_up_mf,
+       sprintf("GO MF - up-regulated (%s vs %s)", p$treatment, p$control),
+       "#A9DFBF","#1E8449", padj_thr=padj_thr)
+```
+
+### UP-regulated — CC
+
+```{r go-up-cc}
+go_bar(go_up_cc,
+       sprintf("GO CC - up-regulated (%s vs %s)", p$treatment, p$control),
+       "#FAD7A0","#CA6F1E", padj_thr=padj_thr)
+```
+
+### UP-regulated — KEGG
+
+```{r go-up-kegg}
+go_bar(go_up_kegg,
+       sprintf("KEGG - up-regulated (%s vs %s)", p$treatment, p$control),
+       "#D2B4DE","#6C3483", padj_thr=padj_thr)
+```
+
+### UP-regulated — DO
+
+```{r go-up-do}
+go_bar(go_up_do,
+       sprintf("Disease Ontology - up-regulated (%s vs %s)", p$treatment, p$control),
+       "#FADBD8","#922B21", padj_thr=padj_thr)
+```
+
+### DOWN-regulated — BP
+
+```{r go-dn-bp, fig.cap="GO Biological Process terms enriched among DOWN-regulated canonical genes."}
+go_bar(go_dn_bp,
+       sprintf("GO BP - down-regulated (%s vs %s)", p$treatment, p$control),
+       "#AED6F1","#154360", padj_thr=padj_thr)
+```
+
+### DOWN-regulated — MF
+
+```{r go-dn-mf}
+go_bar(go_dn_mf,
+       sprintf("GO MF - down-regulated (%s vs %s)", p$treatment, p$control),
+       "#A9DFBF","#145A32", padj_thr=padj_thr)
+```
+
+### DOWN-regulated — CC
+
+```{r go-dn-cc}
+go_bar(go_dn_cc,
+       sprintf("GO CC - down-regulated (%s vs %s)", p$treatment, p$control),
+       "#FAD7A0","#784212", padj_thr=padj_thr)
+```
+
+### DOWN-regulated — KEGG
+
+```{r go-dn-kegg}
+go_bar(go_dn_kegg,
+       sprintf("KEGG - down-regulated (%s vs %s)", p$treatment, p$control),
+       "#D7BDE2","#4A235A", padj_thr=padj_thr)
+```
+
+### DOWN-regulated — DO
+
+```{r go-dn-do}
+go_bar(go_dn_do,
+       sprintf("Disease Ontology - down-regulated (%s vs %s)", p$treatment, p$control),
+       "#FADBD8","#641E16", padj_thr=padj_thr)
+```
+
+### ALL DE — BP
+
+```{r go-all-bp, fig.cap="GO Biological Process terms enriched among all DE canonical genes (UP + DOWN combined)."}
+go_bar(go_all_bp,
+       sprintf("GO BP - all DE (%s vs %s)", p$treatment, p$control),
+       "#D5D8DC","#2C3E50", padj_thr=padj_thr)
+```
+
+### ALL DE — MF
+
+```{r go-all-mf}
+go_bar(go_all_mf,
+       sprintf("GO MF - all DE (%s vs %s)", p$treatment, p$control),
+       "#D5F5E3","#1E8449", padj_thr=padj_thr)
+```
+
+### ALL DE — CC
+
+```{r go-all-cc}
+go_bar(go_all_cc,
+       sprintf("GO CC - all DE (%s vs %s)", p$treatment, p$control),
+       "#FDEBD0","#CA6F1E", padj_thr=padj_thr)
+```
+
+### ALL DE — KEGG
+
+```{r go-all-kegg}
+go_bar(go_all_kegg,
+       sprintf("KEGG - all DE (%s vs %s)", p$treatment, p$control),
+       "#E8DAEF","#6C3483", padj_thr=padj_thr)
+```
+
+### ALL DE — DO
+
+```{r go-all-do}
+go_bar(go_all_do,
+       sprintf("Disease Ontology - all DE (%s vs %s)", p$treatment, p$control),
+       "#FDEDEC","#922B21", padj_thr=padj_thr)
+```
+
+:::
+
+## TE Host Genes — GO Enrichment
+
+> TE host genes: genes whose annotated body overlaps ≥1 RepeatMasker hg38 TE locus (bedtools intersect ≥10% overlap; M11). The GO background universe is restricted to these 51,934 host genes, making the enrichment specific to the TE-hosting gene context.
+
+### TE Host — Biological Process
+
+```{r go-te-bp, fig.cap="GO Biological Process terms enriched among DE TE host genes, using a TE host-specific background universe (51,934 genes with ≥1 overlapping TE locus, RepeatMasker hg38, M11). Using this restricted universe avoids overestimation of enrichment that would occur with all human genes as background."}
+go_bar(go_te_bp, "GO BP — TE host genes (rmsk universe)",
+       "#ABEBC6","#1E8449", padj_thr=padj_thr)
+```
+
+### TE Host — Molecular Function
+
+```{r go-te-mf, fig.cap="GO Molecular Function terms enriched among DE TE host genes (TE-specific universe). MF enrichment among TE hosts can reveal whether TE-harbouring genes are disproportionately involved in specific biochemical activities, linking TE distribution to gene function."}
+go_bar(go_te_mf, "GO MF — TE host genes (rmsk universe)",
+       "#A9DFBF","#117A65", padj_thr=padj_thr)
+```
+
+### TE Host — Cellular Component
+
+```{r go-te-cc, fig.cap="GO Cellular Component terms enriched among DE TE host genes (TE-specific universe)."}
+go_bar(go_te_cc, "GO CC — TE host genes (rmsk universe)",
+       "#FAD7A0","#9A7D0A", padj_thr=padj_thr)
+```
+
+## TE Genomic Distribution
+
+```{r te-genomic, fig.height=6, fig.width=9, fig.cap="Top 30 genes ranked by TE insertion density in their gene body among DE TE host genes (TE loci per kb of gene body). Only genes that are both differentially expressed AND host at least one TE locus are shown. Density normalisation corrects for gene length bias. Colour indicates TE macrocategory with the highest density per gene."}
+if (!is.null(te_host) && !is.null(de_genes)) {
+  # Get DE gene IDs
+  gid_col_de  <- colnames(de_genes)[ncol(de_genes)]
+  de_gene_ids <- de_genes[[gid_col_de]][!is.na(de_genes$padj) &
+                                         de_genes$padj < padj_thr]
+
+  if (length(de_gene_ids) == 0) {
+    # Relaxed fallback for test data
+    de_gene_ids <- de_genes[[gid_col_de]][!is.na(de_genes$padj) &
+                                           de_genes$padj < 0.5]
+    cat(sprintf("[Note] Using padj<0.5 fallback: %d DE genes
+",
+                length(de_gene_ids)))
+  }
+
+  # Join DE genes with TE host table
+  te_de_host <- te_host |>
+    filter(gene_id %in% de_gene_ids) |>
+    mutate(
+      gene_name   = gene_names[gene_id],
+      label       = ifelse(!is.na(gene_name) & gene_name!="", gene_name, gene_id),
+      n_te_loci   = if ("n_te_loci"    %in% colnames(te_host)) n_te_loci else
+                    if ("te_count"     %in% colnames(te_host)) te_count else 1L,
+      gene_len_kb = if ("gene_length"  %in% colnames(te_host)) gene_length/1000 else NA_real_,
+      dominant_macro = if ("dominant_macro" %in% colnames(te_host)) dominant_macro else
+                       if ("te_class"       %in% colnames(te_host)) te_class else "Other TE",
+      te_density  = ifelse(!is.na(gene_len_kb) & gene_len_kb > 0,
+                           n_te_loci / gene_len_kb, NA_real_)
+    )
+
+  if (nrow(te_de_host) == 0) {
+    cat("No DE TE host genes found at current thresholds.
+")
+    cat(sprintf("DE genes: %d | TE host genes: %d
+",
+                length(de_gene_ids), nrow(te_host)))
+  } else {
+    # Use n_te_loci if density not available
+    sort_col <- if (all(is.na(te_de_host$te_density))) "n_te_loci" else "te_density"
+
+    top30 <- te_de_host |>
+      arrange(desc(.data[[sort_col]])) |>
+      head(30)
+
+    y_lab <- if (sort_col == "te_density") "TE loci per kb of gene body" else
+             "Number of TE loci"
+    title_sfx <- if (sort_col == "te_density") "(density-normalised)" else
+                 "(raw loci count - gene length unavailable)"
+
+    ggplot(top30, aes(x=reorder(label, .data[[sort_col]]),
+                       y=.data[[sort_col]], fill=dominant_macro)) +
+      geom_col() +
+      coord_flip() +
+      scale_fill_manual(values=col_macro, na.value="#95A5A6",
+                        name="Dominant TE") +
+      labs(title=sprintf("Top 30 DE TE host genes %s", title_sfx),
+           subtitle=sprintf("DE genes (padj<%.2f) with >=1 TE in gene body | %d genes total",
+                            padj_thr, nrow(te_de_host)),
+           x=NULL, y=y_lab) +
+      theme_minimal(base_size=11)
+  }
+} else {
+  cat("TE host gene data not available (te_host_genes.tsv from M11).
+")
+}
+```
+
+## TE Insertions in DE Gene Promoters and Gene Bodies (M11b/M11d)
+
+> **Note (test data):** Results shown use a relaxed threshold (padj<0.5, |LFC|>0.5) 
+> to enable pipeline validation. With full-depth data, standard thresholds 
+> (padj<0.05, |LFC|>1) will be applied automatically.
+
+### Overview: Genes with Promoter TE Insertions
+
+```{r promoter-te-summary, fig.height=5, fig.width=8, fig.cap="Number of genes with TE insertions within 2kb upstream of the TSS, by TE macrocategory. Based on bedtools intersect of GENCODE v49 promoter windows with RepeatMasker hg38 (M11b)."}
+if (!is.null(te_prom_summary)) {
+  te_prom_summary |>
+    mutate(te_macrocategory=reorder(te_macrocategory, n_genes_with_promoter_te)) |>
+    ggplot(aes(x=te_macrocategory, y=n_genes_with_promoter_te,
+               fill=te_macrocategory)) +
+    geom_col(show.legend=FALSE) +
+    geom_text(aes(label=scales::comma(n_genes_with_promoter_te)),
+              hjust=-0.1, size=3.5) +
+    coord_flip() +
+    scale_fill_manual(values=col_macro) +
+    scale_y_continuous(expand=expansion(mult=c(0,0.15)),
+                       labels=scales::comma) +
+    labs(title="Genes with promoter TE insertions by macrocategory",
+         subtitle=sprintf("Total: %s genes (2kb upstream TSS)",
+                          scales::comma(sum(te_prom_summary$n_genes_with_promoter_te))),
+         x=NULL, y="Number of genes") +
+    theme_minimal(base_size=12)
+} else cat("Promoter TE summary not available.
+")
+```
+
+### DE Genes with TE Insertions — Enrichment Analysis
+
+```{r de-te-barplot, fig.height=5, fig.width=7, fig.cap="DE genes stratified by TE insertion context. 'Promoter TE' = TE within 2kb upstream of TSS; 'Body TE' = TE within the gene locus (start to end). Fisher's exact test p-values shown."}
+if (!is.null(de_te_integrated) && nrow(de_te_integrated) > 0) {
+  p_cat <- de_te_integrated |>
+    count(direction, te_category) |>
+    ggplot(aes(x=direction, y=n, fill=te_category)) +
+    geom_col(position="stack", width=0.6) +
+    scale_fill_manual(values=c(
+      "Promoter + Body TE" = "#8E44AD",
+      "Promoter TE only"   = "#3498DB",
+      "Body TE only"       = "#E67E22",
+      "No TE"              = "#BDC3C7"
+    ), name="TE context") +
+    labs(title="DE genes by TE insertion context",
+         x="Direction", y="Number of DE genes") +
+    theme_minimal(base_size=13)
+  print(p_cat)
+} else cat("DE-TE integration data not available.
+")
+```
+
+```{r fisher-enrichment}
+if (!is.null(te_enrich_fisher) && nrow(te_enrich_fisher) > 0) {
+  te_enrich_fisher |>
+    mutate(
+      sig = ifelse(pvalue < 0.05, "yes", "no"),
+      pvalue = formatC(pvalue, digits=4, format="g"),
+      odds_ratio = round(odds_ratio, 2)
+    ) |>
+    select(Analysis=analysis, `DE with TE`=n_DE_with, `DE total`=n_DE_total,
+           `BG with TE`=n_bg_with, `BG total`=n_bg_total,
+           OR=odds_ratio, `p-value`=pvalue, Significant=sig) |>
+    knitr::kable(caption="Fisher's exact test: TE enrichment in DE genes vs background (expressed genes, baseMean>5). OR>1 = DE genes enriched for TE insertions.",
+                 align="lrrrrrrc")
+} else cat("Fisher test results not available.
+")
+```
+
+```{r macro-enrichment, fig.height=4.5, fig.width=7, fig.cap="Enrichment of each TE macrocategory in promoters of DE genes. Fisher's exact test (one-sided, greater). Dashed line = p=0.05; * = BH-adjusted p<0.05. With full data, significant bars indicate TE families whose presence in promoters correlates with differential expression."}
+if (!is.null(macro_enrich) && nrow(macro_enrich) > 0) {
+  macro_enrich |>
+    mutate(
+      sig = ifelse(padj < 0.05, "*", ""),
+      macrocategory = reorder(macrocategory, -log10(pvalue + 1e-10))
+    ) |>
+    ggplot(aes(x=macrocategory, y=-log10(pvalue), fill=macrocategory)) +
+    geom_col(show.legend=FALSE) +
+    geom_text(aes(label=sig), vjust=-0.3, size=5) +
+    geom_hline(yintercept=-log10(0.05), linetype="dashed",
+               color="grey40", linewidth=0.6) +
+    scale_fill_manual(values=col_macro) +
+    labs(title="Promoter TE macrocategory enrichment in DE genes",
+         subtitle="Fisher's exact test; dashed = p=0.05; * = BH adj p<0.05",
+         x=NULL, y="-log10(p-value)") +
+    theme_minimal(base_size=12) +
+    theme(axis.text.x=element_text(angle=30, hjust=1))
+} else cat("Macrocategory enrichment not available.
+")
+```
+
+### Top DE Genes with TE Annotations
+
+```{r de-te-lollipop, fig.height=9, fig.width=10, fig.cap="Top 30 DE genes ordered by log2FC. Symbol indicates TE insertion context: '** Prom+Body' = promoter AND gene body; '>> Promoter' = promoter only; '>> Body' = gene body only; '-- None' = no TE insertion detected. Point size proportional to significance (-log10 padj)."}
+if (!is.null(de_te_integrated) && nrow(de_te_integrated) > 0) {
+  top_de <- de_te_integrated |>
+    arrange(padj, desc(abs(log2FoldChange))) |>
+    head(30) |>
+    mutate(
+      label    = ifelse(!is.na(gene_name) & gene_name!="", gene_name, gene_id),
+      te_label = case_when(
+        has_prom_te & has_body_te ~ "** Prom+Body",
+        has_prom_te               ~ ">> Promoter",
+        has_body_te               ~ ">> Body",
+        TRUE                      ~ "-- None"
+      )
+    )
+  ggplot(top_de, aes(x=reorder(label, log2FoldChange),
+                     y=log2FoldChange, color=te_label)) +
+    geom_segment(aes(xend=reorder(label, log2FoldChange), yend=0),
+                 linewidth=0.8, alpha=0.6) +
+    geom_point(aes(size=-log10(padj + 1e-10)), alpha=0.9) +
+    geom_hline(yintercept=0, linetype="dashed", color="grey50") +
+    coord_flip() +
+    scale_color_manual(values=c(
+      "** Prom+Body" = "#8E44AD",
+      ">> Promoter"  = "#3498DB",
+      ">> Body"      = "#E67E22",
+      "-- None"      = "#95A5A6"
+    ), name="TE context") +
+    scale_size_continuous(range=c(2,7), name="-log10(padj)") +
+    labs(title="Top 30 DE genes - TE insertion context",
+         x=NULL,
+         y=sprintf("log2FC (%s / %s)", p$treatment, p$control)) +
+    theme_minimal(base_size=11) +
+    theme(legend.position="right")
+} else cat("DE-TE lollipop data not available.
+")
+```
+
+```{r de-te-full-table}
+if (!is.null(de_te_integrated) && nrow(de_te_integrated) > 0) {
+  de_te_integrated |>
+    arrange(padj, desc(abs(log2FoldChange))) |>
+    mutate(
+      log2FC   = round(log2FoldChange, 3),
+      padj_fmt = formatC(padj, digits=3, format="g")
+    ) |>
+    select(
+      Gene=gene_name, `Gene ID`=gene_id,
+      log2FC, `padj`=padj_fmt, Direction=direction,
+      `TE context`=te_category,
+      `Prom TE loci`=n_te_prom_loci,
+      `Prom TE families`=n_te_prom_families,
+      `Prom macros`=te_prom_macros
+    ) |>
+    DT::datatable(
+      caption="All DE genes with TE annotation (promoter and gene body). Download for complete list.",
+      options=list(pageLength=15, scrollX=TRUE,
+                   dom="Bfrtip", buttons=c("csv","excel")),
+      extensions="Buttons",
+      rownames=FALSE
+    )
+} else cat("DE-TE table not available.
+")
+```
+
+### GO Enrichment — DE Genes with Promoter TE
+
+```{r go-prom-te-bp, fig.height=6, fig.width=9, fig.cap="GO Biological Process enrichment for DE genes with TE insertions in their promoter region. These genes may be transcriptionally regulated by TE-derived regulatory elements (e.g. SINE-derived enhancers, LTR promoters)."}
+if (!is.null(go_prom_te_bp) && nrow(go_prom_te_bp) > 0) {
+  go_bar(go_prom_te_bp,
+         "GO BP - DE genes with promoter TE",
+         fill_low="#AED6F1", fill_high="#1A5276")
+} else {
+  cat("GO enrichment for promoter TE DE genes not available.
+")
+  cat("Requires >= 3 DE genes with promoter TE and clusterProfiler.
+")
+}
+```
+
+```{r go-prom-te-mf, fig.height=5, fig.width=9}
+if (!is.null(go_prom_te_mf) && nrow(go_prom_te_mf) > 0)
+  go_bar(go_prom_te_mf, "GO MF - DE genes with promoter TE",
+         fill_low="#A9DFBF", fill_high="#1E8449")
+```
+
+### GO Enrichment — DE Genes with Gene Body TE
+
+```{r go-body-te-bp, fig.height=6, fig.width=9, fig.cap="GO Biological Process enrichment for DE genes with TE insertions within the gene body. Intronic TE insertions may affect splicing, create alternative exons, or alter transcription elongation."}
+if (!is.null(go_body_te_bp) && nrow(go_body_te_bp) > 0) {
+  go_bar(go_body_te_bp,
+         "GO BP - DE genes with gene body TE",
+         fill_low="#F9E79F", fill_high="#7D6608")
+} else {
+  cat("GO enrichment for gene body TE DE genes not available.
+")
+}
+```
+
+
+# circRNA Analysis
+
+## Detection Summary
+
+```{r circ-summary}
+if (!is.null(circ_annot) && nrow(circ_annot)>0) {
+  kable(circ_annot |> arrange(desc(n_samples_detected)),
+        caption="Detected circRNA loci after cross-sample merging (CIRI2, BWA-MEM, coordinate tolerance ±10bp). circ_type: CIRI2 classification (exonic, intronic, intergenic_region). n_samples_detected: samples with ≥2 supporting back-splice junction reads.") |>
+    kable_styling(bootstrap_options=c("striped","hover","condensed"))
+} else {
+  cat("No circRNA detected at current thresholds (min 2 junction reads per sample).\n")
+}
+```
+
+## Junction Read Counts
+
+```{r circ-counts}
+if (!is.null(circ_counts) && nrow(circ_counts)>0) {
+  kable(circ_counts,
+        caption="Back-splice junction read counts per circRNA locus and sample. Each value is the number of chimeric reads spanning the back-splice junction.") |>
+    kable_styling(bootstrap_options=c("striped","hover","condensed"))
+}
+```
+
+## Differential Expression
+
+```{r circ-de}
+if (!is.null(circ_de) && nrow(circ_de)>0) {
+  circ_sig <- circ_de |>
+    filter(!is.na(padj), padj<padj_thr, abs(log2FoldChange)>lfc_thr)
+
+  show_df <- if (nrow(circ_sig)>0) {
+    circ_sig |> arrange(padj)
+  } else {
+    circ_de |> arrange(pvalue)
+  }
+
+  cap <- if (nrow(circ_sig)>0) {
+    sprintf("Significantly DE circRNA loci (padj<%.2f, |LFC|>%.1f). Wilcoxon rank-sum test with BH correction (n<3 per group). log2FoldChange = log2((mean_%s+1)/(mean_%s+1)).", padj_thr, lfc_thr, p$treatment, p$control)
+  } else {
+    sprintf("All tested circRNA loci (Wilcoxon rank-sum, BH correction). No loci reached significance thresholds (padj<%.2f, |LFC|>%.1f).", padj_thr, lfc_thr)
+  }
+
+  show_df |> mutate(across(where(is.numeric),~round(.,4))) |>
+    kable(caption=cap) |>
+    kable_styling(bootstrap_options=c("striped","hover","condensed"))
+}
+```
+
+---
+
+# TE Locus-Specific Analysis (M12)
+
+## TEtranscripts
+
+> TEtranscripts uses Expectation-Maximization to resolve multi-mapping reads between canonical gene loci and TE insertions simultaneously. The section below shows **only TE-derived features** (non-ENSG IDs). Canonical gene DE results are in Section 2.
+
+```{r tet-results}
+if (!is.null(tet_sig) && nrow(tet_sig) > 0) {
+  if (!"gene_id" %in% colnames(tet_sig)) {
+    tet_sig$feature_id <- rownames(tet_sig)
+  } else {
+    tet_sig$feature_id <- tet_sig$gene_id
+  }
+
+  # Separate TE features (non-ENSG) from canonical genes (ENSG)
+  te_features <- tet_sig |>
+    filter(!grepl("^ENSG", feature_id)) |>
+    mutate(
+      te_name   = sub(":.*", "", feature_id),
+      te_family = sub("^[^:]+:([^:]+):.*", "\1", feature_id),
+      te_class  = sub("^[^:]+:[^:]+:(.*)", "\1", feature_id),
+      macro     = classify_macro(te_name)
+    ) |>
+    arrange(padj) |>
+    select(TE=te_name, Family=te_family, Class=te_class, Macro=macro,
+           any_of(c("baseMean","log2FoldChange","log2FoldChange_shrunk",
+                    "pvalue","padj"))) |>
+    mutate(across(where(is.numeric), ~round(., 4)))
+
+  canon_n <- sum(grepl("^ENSG", tet_sig$feature_id))
+  te_n    <- nrow(te_features)
+
+  cat(sprintf("TEtranscripts significant features: %d total (%d canonical genes, %d TE loci)
+",
+              nrow(tet_sig), canon_n, te_n))
+
+  if (te_n > 0) {
+    DT::datatable(
+      te_features,
+      caption=sprintf(
+        "Significant TE-derived features from TEtranscripts (%s vs %s, padj<%.2f). %d canonical gene features excluded (see Section 2).",
+        p$treatment, p$control, padj_thr, canon_n),
+      options=list(pageLength=15, scrollX=TRUE,
+                   dom="Bfrtip", buttons=c("csv","excel")),
+      extensions="Buttons",
+      rownames=FALSE
+    )
+  } else {
+    cat("No significant TE-specific features at current thresholds.
+")
+    cat("(All TEtranscripts hits are canonical genes — shown in Section 2)
+")
+  }
+} else {
+  cat("No significant TEtranscripts features at current thresholds.")
+}
+```
+
+---
+
+# De Novo Transcripts (M16 — StringTie)
+
+> StringTie assembled transcripts de novo from STAR-aligned BAM files, then merged across samples and compared to GENCODE v49 using gffcompare. Novel transcripts were quantified with `-e -b` and tested for differential expression using DESeq2 (proxy counts from FPKM x 10).
+
+> **Note (test data):** Thresholds padj<0.5, |LFC|>0.5, min-cov=0.1 used for pipeline validation. Production: padj<0.05, |LFC|>1.0, min-cov=1.0.
+
+## Assembly Summary
+
+```{r st-summary}
+if (!is.null(st_summary)) {
+  knitr::kable(st_summary,
+    caption="StringTie de novo assembly summary. 'Exact match' = transcripts fully matching GENCODE annotation. Novel categories: j=new junction combination, i=novel intronic, u=novel intergenic, x=antisense to reference.",
+    col.names=c("Metric","Count"),
+    format.args=list(big.mark=",")) |>
+    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+} else cat("StringTie summary not available.
+")
+```
+
+```{r st-class-codes, fig.height=5, fig.width=9, fig.cap="Distribution of gffcompare class codes. Red = novel or partially novel transcripts; blue = matching reference annotation. 'j' (new junction combination) are high-confidence novel isoforms sharing splice sites with known transcripts."}
+if (!is.null(st_class_codes)) {
+  st_class_codes |>
+    mutate(
+      label = paste0(class_code, "
+", sub(" .*","",description)),
+      label = reorder(label, n)
+    ) |>
+    ggplot(aes(x=label, y=n, fill=novel)) +
+    geom_col() +
+    scale_fill_manual(values=c("TRUE"="#E74C3C","FALSE"="#85C1E9"),
+                      labels=c("TRUE"="Novel","FALSE"="Annotated"), name=NULL) +
+    scale_y_continuous(labels=scales::comma) +
+    labs(title="StringTie transcript classification (gffcompare)",
+         x="Class code", y="Number of transcripts") +
+    theme_minimal(base_size=12)
+} else cat("Class code data not available.
+")
+```
+
+## Novel Transcript DE
+
+```{r novel-de-summary}
+if (!is.null(novel_de)) {
+  n_sig <- sum(!is.na(novel_de$padj) & novel_de$padj < padj_thr &
+                 abs(novel_de$log2FoldChange) > lfc_thr, na.rm=TRUE)
+  cat(sprintf("Novel transcripts tested: %d
+", nrow(novel_de)))
+  cat(sprintf("Significant (padj<%.2f, |LFC|>%.1f): %d
+",
+              padj_thr, lfc_thr, n_sig))
+} else cat("Novel DE data not available.
+")
+```
+
+```{r novel-de-volcano, fig.height=6, fig.width=9, fig.cap="Volcano plot of novel transcript differential expression. Each point is a StringTie-assembled novel transcript not matching GENCODE annotation. Red = up-regulated in treatment; blue = down-regulated. Labels show transcript IDs of most significant events."}
+if (!is.null(novel_de) && nrow(novel_de) > 0) {
+  novel_de |>
+    filter(!is.na(padj), !is.na(log2FoldChange)) |>
+    mutate(
+      sig = padj < padj_thr & abs(log2FoldChange) > lfc_thr,
+      col = case_when(
+        sig & log2FoldChange > 0 ~ "UP",
+        sig & log2FoldChange < 0 ~ "DOWN",
+        TRUE ~ "NS"
+      ),
+      lab = ifelse(sig, t_name, NA)
+    ) |>
+    ggplot(aes(x=log2FoldChange, y=-log10(padj+1e-10), color=col)) +
+    geom_point(alpha=0.7, size=1.8) +
+    ggrepel::geom_text_repel(aes(label=lab), size=2.5,
+                              max.overlaps=15, show.legend=FALSE) +
+    scale_color_manual(values=c(UP="#E74C3C",DOWN="#3498DB",NS="#BDC3C7"),
+                       name=NULL) +
+    geom_vline(xintercept=c(-lfc_thr, lfc_thr),
+               linetype="dashed", color="grey50") +
+    geom_hline(yintercept=-log10(padj_thr),
+               linetype="dashed", color="grey50") +
+    labs(title="Novel transcript DE - volcano",
+         subtitle=sprintf("%s vs %s", p$treatment, p$control),
+         x=sprintf("log2FC (%s / %s)", p$treatment, p$control),
+         y="-log10(padj)") +
+    theme_minimal(base_size=12)
+} else cat("Novel DE data not available.
+")
+```
+
+```{r novel-de-table}
+if (!is.null(novel_de) && nrow(novel_de) > 0) {
+  novel_de |>
+    filter(!is.na(padj)) |>
+    arrange(padj, desc(abs(log2FoldChange))) |>
+    head(50) |>
+    mutate(
+      log2FC = round(log2FoldChange, 3),
+      padj   = formatC(padj, digits=3, format="g")
+    ) |>
+    select(Transcript=t_name,
+           any_of(c("class_code","class_desc","ref_gene_id",
+                    "chr","strand","gene_id","gene_name")),
+           log2FC, padj) |>
+    DT::datatable(
+      caption="Top 50 novel DE transcripts. class_code: j=new junction combo, u=intergenic, i=intronic, x=antisense.",
+      options=list(pageLength=15, scrollX=TRUE,
+                   dom="Bfrtip", buttons=c("csv","excel")),
+      extensions="Buttons", rownames=FALSE
+    )
+} else cat("Novel DE table not available.
+")
+```
+
+# Differential Alternative Splicing (M17 — rMATS)
+
+> rMATS quantified five classes of alternative splicing events from STAR-aligned BAM files: Skipped Exon (SE), Alternative 3'/5' Splice Site (A3SS/A5SS), Mutually Exclusive Exons (MXE), and Retained Intron (RI). deltaPSI = PSI(treatment) - PSI(control), where PSI (Percent Spliced In) ranges from 0 to 1.
+
+> **Note (test data):** Run with `--statoff` (2 replicates) — events filtered by |dPSI|>0.1 only, no FDR available. Production: re-run rMATS without `--statoff` (>=3 replicates) and apply FDR<0.05.
+
+## Event Summary
+
+```{r splicing-summary, fig.height=5, fig.width=9, fig.cap="Differential alternative splicing events by type. Positive bars = increased inclusion in treatment; negative bars = decreased inclusion (increased skipping/exclusion). deltaPSI threshold: 0.1."}
+if (!is.null(splicing_summary)) {
+  col_event <- c(SE="#E74C3C", A3SS="#3498DB", A5SS="#2ECC71",
+                 MXE="#F39C12", RI="#9B59B6")
+  label_event <- c(SE="Skipped Exon", A3SS="Alt 3' SS",
+                   A5SS="Alt 5' SS", MXE="Mut. Excl.", RI="Ret. Intron")
+
+  splicing_summary |>
+    select(event_type, sig_enhanced, sig_skipped) |>
+    pivot_longer(-event_type, names_to="direction", values_to="n") |>
+    mutate(
+      n = ifelse(direction=="sig_skipped", -n, n),
+      direction = ifelse(direction=="sig_enhanced",
+                         paste0("Increased in ", p$treatment),
+                         paste0("Decreased in ", p$treatment))
+    ) |>
+    ggplot(aes(x=event_type, y=n, fill=direction)) +
+    geom_col() +
+    geom_hline(yintercept=0, linewidth=0.5) +
+    scale_fill_manual(values=c("#E74C3C","#3498DB"), name=NULL) +
+    labs(title="Differential splicing events by type",
+         subtitle=sprintf("%s vs %s | |dPSI|>0.1", p$treatment, p$control),
+         x="Event type", y="Significant events") +
+    theme_minimal(base_size=13)
+} else cat("Splicing summary not available.
+")
+```
+
+```{r splicing-summary-table}
+if (!is.null(splicing_summary)) {
+  splicing_summary |>
+    mutate(pct_sig=round(100*sig_events/total_events, 1)) |>
+    select(Type=event_type, Description=description,
+           Total=total_events, Significant=sig_events,
+           `% sig`=pct_sig,
+           `Increased`=sig_enhanced, `Decreased`=sig_skipped,
+           `Mean |dPSI|`=mean_dpsi) |>
+    knitr::kable(caption="Summary of differential splicing events per type.") |>
+    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+} else cat("Splicing summary not available.
+")
+```
+
+## Top Events by Type
+
+::: {.panel-tabset}
+
+### Skipped Exon (SE)
+
+```{r top-se, fig.height=8, fig.width=10, fig.cap="Top 30 Skipped Exon events by |dPSI|. Positive dPSI = exon more included in treatment; negative dPSI = exon more skipped. Point size = total junction reads."}
+if (!is.null(top_se) && nrow(top_se) > 0) {
+  top_se |>
+    mutate(label=ifelse(!is.na(geneSymbol) & geneSymbol!="",
+                        geneSymbol, GeneID),
+           dir=ifelse(deltaPSI>0, paste0("Included in ",p$treatment),
+                      paste0("Skipped in ",p$treatment))) |>
+    ggplot(aes(x=reorder(label,deltaPSI), y=deltaPSI, color=dir)) +
+    geom_segment(aes(xend=reorder(label,deltaPSI),yend=0),
+                 linewidth=0.8, alpha=0.7) +
+    geom_point(aes(size=jc_reads_total), alpha=0.9) +
+    coord_flip() +
+    scale_color_manual(values=c("#E74C3C","#3498DB"), name=NULL) +
+    scale_size_continuous(range=c(2,7), name="Junction reads") +
+    labs(title="Top SE events", x=NULL,
+         y=sprintf("dPSI (%s - %s)", p$treatment, p$control)) +
+    theme_minimal(base_size=11)
+} else cat("SE data not available.
+")
+```
+
+### Alt 3' Splice Site (A3SS)
+
+```{r top-a3ss, fig.height=8, fig.width=10}
+if (!is.null(top_a3ss) && nrow(top_a3ss) > 0) {
+  top_a3ss |>
+    mutate(label=ifelse(!is.na(geneSymbol)&geneSymbol!="",geneSymbol,GeneID),
+           dir=ifelse(deltaPSI>0,paste0("Alt site in ",p$treatment),
+                      paste0("Ref site in ",p$treatment))) |>
+    ggplot(aes(x=reorder(label,deltaPSI),y=deltaPSI,color=dir)) +
+    geom_segment(aes(xend=reorder(label,deltaPSI),yend=0),
+                 linewidth=0.8,alpha=0.7) +
+    geom_point(aes(size=jc_reads_total),alpha=0.9) +
+    coord_flip() +
+    scale_color_manual(values=c("#E74C3C","#3498DB"),name=NULL) +
+    scale_size_continuous(range=c(2,7),name="Junction reads") +
+    labs(title="Top A3SS events",x=NULL,
+         y=sprintf("dPSI (%s - %s)",p$treatment,p$control)) +
+    theme_minimal(base_size=11)
+} else cat("A3SS data not available.
+")
+```
+
+### Alt 5' Splice Site (A5SS)
+
+```{r top-a5ss, fig.height=8, fig.width=10}
+if (!is.null(top_a5ss) && nrow(top_a5ss) > 0) {
+  top_a5ss |>
+    mutate(label=ifelse(!is.na(geneSymbol)&geneSymbol!="",geneSymbol,GeneID),
+           dir=ifelse(deltaPSI>0,paste0("Alt site in ",p$treatment),
+                      paste0("Ref site in ",p$treatment))) |>
+    ggplot(aes(x=reorder(label,deltaPSI),y=deltaPSI,color=dir)) +
+    geom_segment(aes(xend=reorder(label,deltaPSI),yend=0),
+                 linewidth=0.8,alpha=0.7) +
+    geom_point(aes(size=jc_reads_total),alpha=0.9) +
+    coord_flip() +
+    scale_color_manual(values=c("#E74C3C","#3498DB"),name=NULL) +
+    scale_size_continuous(range=c(2,7),name="Junction reads") +
+    labs(title="Top A5SS events",x=NULL,
+         y=sprintf("dPSI (%s - %s)",p$treatment,p$control)) +
+    theme_minimal(base_size=11)
+} else cat("A5SS data not available.
+")
+```
+
+### Mutually Exclusive Exons (MXE)
+
+```{r top-mxe, fig.height=8, fig.width=10}
+if (!is.null(top_mxe) && nrow(top_mxe) > 0) {
+  top_mxe |>
+    mutate(label=ifelse(!is.na(geneSymbol)&geneSymbol!="",geneSymbol,GeneID),
+           dir=ifelse(deltaPSI>0,paste0("Exon1 in ",p$treatment),
+                      paste0("Exon2 in ",p$treatment))) |>
+    ggplot(aes(x=reorder(label,deltaPSI),y=deltaPSI,color=dir)) +
+    geom_segment(aes(xend=reorder(label,deltaPSI),yend=0),
+                 linewidth=0.8,alpha=0.7) +
+    geom_point(aes(size=jc_reads_total),alpha=0.9) +
+    coord_flip() +
+    scale_color_manual(values=c("#E74C3C","#3498DB"),name=NULL) +
+    scale_size_continuous(range=c(2,7),name="Junction reads") +
+    labs(title="Top MXE events",x=NULL,
+         y=sprintf("dPSI (%s - %s)",p$treatment,p$control)) +
+    theme_minimal(base_size=11)
+} else cat("MXE data not available.
+")
+```
+
+### Retained Intron (RI)
+
+```{r top-ri, fig.height=8, fig.width=10}
+if (!is.null(top_ri) && nrow(top_ri) > 0) {
+  top_ri |>
+    mutate(label=ifelse(!is.na(geneSymbol)&geneSymbol!="",geneSymbol,GeneID),
+           dir=ifelse(deltaPSI>0,paste0("Intron retained in ",p$treatment),
+                      paste0("Intron spliced in ",p$treatment))) |>
+    ggplot(aes(x=reorder(label,deltaPSI),y=deltaPSI,color=dir)) +
+    geom_segment(aes(xend=reorder(label,deltaPSI),yend=0),
+                 linewidth=0.8,alpha=0.7) +
+    geom_point(aes(size=jc_reads_total),alpha=0.9) +
+    coord_flip() +
+    scale_color_manual(values=c("#E74C3C","#3498DB"),name=NULL) +
+    scale_size_continuous(range=c(2,7),name="Junction reads") +
+    labs(title="Top RI events",x=NULL,
+         y=sprintf("dPSI (%s - %s)",p$treatment,p$control)) +
+    theme_minimal(base_size=11)
+} else cat("RI data not available.
+")
+```
+
+:::
+
+## All Significant Splicing Events
+
+```{r sig-splicing-table}
+if (!is.null(sig_splicing) && nrow(sig_splicing) > 0) {
+  sig_splicing |>
+    mutate(
+      deltaPSI       = round(deltaPSI, 3),
+      psi_control    = round(psi_control, 3),
+      psi_treatment  = round(psi_treatment, 3),
+      fdr            = ifelse(is.na(fdr), "N/A",
+                              formatC(fdr, digits=3, format="g"))
+    ) |>
+    select(Type=event_type, Gene=geneSymbol, GeneID,
+           chr, strand, dPSI=deltaPSI,
+           PSI_ctrl=psi_control, PSI_trt=psi_treatment,
+           Reads=jc_reads_total, FDR=fdr) |>
+    DT::datatable(
+      caption=sprintf("All significant splicing events (%d total). dPSI = PSI(%s) - PSI(%s). FDR: N/A when run with --statoff (test data).",
+                      nrow(sig_splicing), p$treatment, p$control),
+      options=list(pageLength=20, scrollX=TRUE,
+                   dom="Bfrtip", buttons=c("csv","excel")),
+      extensions="Buttons", rownames=FALSE,
+      filter="top"
+    )
+} else cat("No significant splicing events at current thresholds.
+")
+```
+
+```{r spliced-de-overlap}
+if (!is.null(spliced_de) && nrow(spliced_de) > 0) {
+  cat(sprintf("Genes with both significant splicing AND DE: %d
+",
+              nrow(spliced_de)))
+  knitr::kable(spliced_de,
+    caption="Genes showing both differential expression (Section 2) and differential splicing. These are high-priority candidates combining transcriptional and post-transcriptional regulation changes.") |>
+    kable_styling(bootstrap_options=c("striped","condensed"))
+} else {
+  cat("No genes with both significant splicing and DE at current thresholds.
+")
+  cat("(Expected with test data - low statistical power)
+")
+}
+```
+
+
+
+# Fusion Genes (M15)
+
+## Arriba Fusion Detection
+
+```{r fusion-summary}
+if (!is.null(fusion_merged) && nrow(fusion_merged) > 0) {
+  cat(sprintf("Total fusion events detected: %d
+", nrow(fusion_merged)))
+  fusion_merged |>
+    arrange(desc(split_reads1 + split_reads2 + discordant_mates)) |>
+    head(20) |>
+    select(any_of(c("sample_id","gene1","gene2","confidence","breakpoint1",
+                    "breakpoint2","split_reads1","split_reads2",
+                    "discordant_mates","type","reading_frame","tags"))) |>
+    DT::datatable(caption="Top fusion gene candidates (Arriba)",
+                  options=list(pageLength=10, scrollX=TRUE), rownames=FALSE)
+} else {
+  cat("Fusion gene data not available — run M15 (Arriba) first.
+")
+  cat("Command: python -m mosaic run-m15 --config config.yaml
+")
+}
+```
+
+# Network Analysis (M18)
+
+## STRINGdb Protein Interaction Network
+
+```{r string-hubs}
+if (!is.null(string_hubs) && nrow(string_hubs) > 0) {
+  string_hubs |>
+    head(20) |>
+    select(any_of(c("STRING_id","gene_name","degree","log2FC","padj","confidence"))) |>
+    DT::datatable(caption="Hub genes by PPI degree (STRINGdb)",
+                  options=list(pageLength=10), rownames=FALSE)
+} else {
+  cat("STRINGdb results not available — run M18 first.
+")
+  cat("Command: Rscript scripts/m18_network.R --de-genes ... --norm-counts ...
+")
+}
+```
+
+```{r string-hub-plot, fig.height=5, fig.width=9, fig.cap="Top hub genes by PPI degree (STRINGdb). Degree = number of interactions. Color = expression direction."}
+if (!is.null(string_hubs) && nrow(string_hubs) > 0 && "degree" %in% colnames(string_hubs)) {
+  string_hubs |>
+    arrange(desc(degree)) |>
+    head(20) |>
+    mutate(
+      label = ifelse(!is.na(gene_name) & gene_name != "" & gene_name != "NA",
+                     gene_name, STRING_id),
+      dir = case_when(
+        !is.na(log2FC) & log2FC > 0 ~ paste0("Up in ", p$treatment),
+        !is.na(log2FC) & log2FC < 0 ~ paste0("Down in ", p$treatment),
+        TRUE ~ "Not DE"
+      )
+    ) |>
+    ggplot(aes(x=reorder(label, degree), y=degree, fill=dir)) +
+    geom_col() + coord_flip() +
+    scale_fill_manual(values=c("#E74C3C","#3498DB","#BDC3C7"), name=NULL) +
+    labs(title="STRINGdb hub genes", x=NULL, y="Degree") +
+    theme_minimal(base_size=12)
+} else cat("Hub gene plot not available.\n")
+```
+
+## WGCNA Co-expression Modules
+
+```{r wgcna-modules}
+if (!is.null(wgcna_modules) && nrow(wgcna_modules) > 0) {
+  n_mods <- length(unique(wgcna_modules$module))
+  cat(sprintf("WGCNA modules detected: %d
+", n_mods))
+
+  wgcna_modules |>
+    group_by(module) |>
+    summarise(n_genes=n(), top_hub=first(gene_name), .groups="drop") |>
+    arrange(desc(n_genes)) |>
+    DT::datatable(caption="WGCNA co-expression modules",
+                  options=list(pageLength=15), rownames=FALSE)
+} else {
+  cat("WGCNA results not available — run M18 first.
+")
+}
+```
+
+```{r wgcna-module-plot, fig.height=5, fig.width=8, fig.cap="WGCNA co-expression modules: genes per module. Grey = unassigned."}
+if (!is.null(wgcna_modules) && nrow(wgcna_modules) > 0) {
+  wgcna_modules |>
+    group_by(module) |>
+    summarise(n_genes=n(), .groups="drop") |>
+    mutate(module=reorder(module, n_genes)) |>
+    ggplot(aes(x=module, y=n_genes, fill=module)) +
+    geom_col(show.legend=FALSE) +
+    geom_text(aes(label=n_genes), hjust=-0.1, size=3.5) +
+    coord_flip() +
+    scale_fill_manual(values=setNames(as.character(
+      unique(wgcna_modules$module)),
+      unique(wgcna_modules$module))) +
+    scale_y_continuous(expand=expansion(mult=c(0,0.15))) +
+    labs(title="WGCNA modules", x="Module", y="Number of genes") +
+    theme_minimal(base_size=12)
+} else cat("Module plot not available.\n")
+```
+
+```{r wgcna-trait-cor, fig.height=5, fig.width=8, fig.cap="WGCNA module-condition correlation. * = p<0.05. Positive = higher in tumor."}
+if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0) {
+  p1 <- wgcna_mt_cor |>
+    arrange(pvalue) |>
+    mutate(sig=ifelse(pvalue<0.05,"*",""),
+           module=reorder(module, correlation)) |>
+    ggplot(aes(x=module, y=correlation, fill=correlation>0)) +
+    geom_col() +
+    geom_text(aes(y=ifelse(correlation>0, correlation+0.05, correlation-0.05),
+                  label=sig), size=5) +
+    geom_hline(yintercept=0, linewidth=0.5) +
+    coord_flip() +
+    scale_fill_manual(values=c("TRUE"="#E74C3C","FALSE"="#3498DB"), name=NULL,
+                      labels=c("TRUE"="Higher in tumor","FALSE"="Higher in normal")) +
+    labs(title="Module-condition correlation",
+         subtitle="* = p<0.05", x="Module", y="Pearson r") +
+    theme_minimal(base_size=12)
+  print(p1)
+  wgcna_mt_cor |>
+    arrange(pvalue) |>
+    mutate(sig=ifelse(pvalue<0.05,"*",""),
+           across(c(correlation,pvalue), ~round(.,4))) |>
+    knitr::kable(caption="WGCNA module-condition correlation table.") |>
+    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+} else cat("Module-trait correlation not available.\n")
+```
+
+# RNA Editing (M19 — JACUSA2)
+
+> A-to-I RNA editing detected via JACUSA2 call-2 comparing normal vs tumor BAM files. A-to-I editing (adenosine-to-inosine, read as guanosine) is catalysed by ADAR enzymes and is dysregulated in many cancers.
+
+> **Note (test data):** Thresholds relaxed (min-cov=3, min-score=0.5, min-ef=0.01). Production: min-cov=5, min-score=1.5, min-ef=0.05, plus DirMult:PHRED statistical model.
+
+## Editing Summary
+
+```{r editing-summary}
+if (!is.null(editing_summary) && nrow(editing_summary) > 0) {
+  knitr::kable(editing_summary,
+    col.names=c("Metric","Value"),
+    caption="RNA A-to-I editing summary (JACUSA2). EF = editing frequency (edited reads / total reads). dEF = EF(tumor) - EF(normal).") |>
+    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+} else cat("RNA editing summary not available.
+")
+```
+
+## Differential Editing
+
+```{r editing-scatter, fig.height=6, fig.width=9, fig.cap="Editing frequency in normal vs tumor samples. Each point is an A-to-I editing site. Red = increased editing in tumor; blue = decreased; grey = similar. Points above diagonal = higher editing in tumor."}
+if (!is.null(editing_sites) && nrow(editing_sites) > 0) {
+  editing_sites |>
+    mutate(col=case_when(
+      dEF >  0.1 ~ paste0("Increased in ",p$treatment),
+      dEF < -0.1 ~ paste0("Decreased in ",p$treatment),
+      TRUE        ~ "Similar")) |>
+    ggplot(aes(x=EF1, y=EF2, color=col)) +
+    geom_point(alpha=0.6, size=1.5) +
+    geom_abline(slope=1,intercept=0,linetype="dashed",color="grey50") +
+    scale_color_manual(values=c("#E74C3C","#3498DB","#BDC3C7"), name=NULL) +
+    labs(title="A-to-I editing frequency: normal vs tumor",
+         x=sprintf("EF (%s)", p$control),
+         y=sprintf("EF (%s)", p$treatment)) +
+    theme_minimal(base_size=13)
+} else cat("Editing site data not available.
+")
+```
+
+```{r editing-top-genes}
+if (!is.null(editing_per_gene) && nrow(editing_per_gene) > 0) {
+  editing_per_gene |>
+    arrange(desc(n_sites)) |>
+    head(20) |>
+    mutate(across(where(is.numeric), ~round(., 3))) |>
+    DT::datatable(
+      caption="Top 20 genes by number of A-to-I editing sites.",
+      options=list(pageLength=10, scrollX=TRUE), rownames=FALSE)
+} else cat("Per-gene editing data not available.
+")
+```
+
+# Metatranscriptomics (M20 — Kraken2/Bracken)
+
+> Reads not mapping to the human reference genome (STAR unmapped) were classified taxonomically using Kraken2 v2.1.3 with the k2_minusb database. Bracken estimated species-level abundances. Homo sapiens reads excluded from microbial analysis.
+
+> **Note (test data):** Very few unmapped reads (588-2671 per sample). With full data, this section will reveal viral, bacterial or fungal signatures in tumor vs normal.
+
+## Classification Summary
+
+```{r meta-classification}
+if (!is.null(meta_summary)) {
+  meta_summary |>
+    mutate(pct_classified=paste0(pct_classified,"%")) |>
+    select(Sample=sample_id, Condition=condition,
+           `Total reads`=total_reads,
+           `Classified`=classified,
+           `% classified`=pct_classified) |>
+    knitr::kable(caption="Kraken2 classification rates for unmapped reads.") |>
+    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+} else cat("Metatranscriptomics summary not available.
+")
+```
+
+## Microbial Composition
+
+```{r meta-barplot, fig.height=6, fig.width=10, fig.cap="Relative abundance of microbial species in unmapped reads per sample (Homo sapiens excluded). With full data, oncogenic viruses (EBV, HPV, HBV) or tumor microbiome signatures may be detected here."}
+if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
+  sample_cols <- coldata$sample_id[coldata$sample_id %in% colnames(meta_abund)]
+  rel_df <- meta_abund |>
+    tidyr::pivot_longer(all_of(sample_cols),
+                        names_to="sample_id", values_to="reads") |>
+    left_join(coldata[,c("sample_id","condition")], by="sample_id") |>
+    group_by(sample_id, condition) |>
+    mutate(rel_abund=reads/sum(reads)*100) |>
+    ungroup()
+
+  top_taxa <- rel_df |>
+    group_by(name) |>
+    summarise(m=mean(rel_abund),.groups="drop") |>
+    arrange(desc(m)) |> head(12) |> pull(name)
+
+  rel_df |>
+    mutate(taxon=ifelse(name %in% top_taxa, name, "Other")) |>
+    group_by(sample_id, condition, taxon) |>
+    summarise(rel_abund=sum(rel_abund),.groups="drop") |>
+    ggplot(aes(x=sample_id, y=rel_abund, fill=taxon)) +
+    geom_col(position="stack") +
+    facet_wrap(~condition, scales="free_x") +
+    labs(title="Microbial composition (unmapped reads)",
+         x=NULL, y="Relative abundance (%)") +
+    theme_minimal(base_size=11) +
+    theme(axis.text.x=element_text(angle=30,hjust=1),
+          legend.text=element_text(size=8))
+} else cat("Microbial abundance data not available.
+")
+```
+
+
+```{r meta-condition-barplot, fig.height=5, fig.width=8, fig.cap="Mean microbial composition per condition."}
+if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
+  sample_cols_m <- coldata$sample_id[coldata$sample_id %in% colnames(meta_abund)]
+  cond_df <- meta_abund |>
+    tidyr::pivot_longer(all_of(sample_cols_m), names_to="sample_id", values_to="reads") |>
+    mutate(condition=conditions[sample_id]) |>
+    group_by(name, condition) |>
+    summarise(mean_reads=mean(reads), .groups="drop") |>
+    group_by(condition) |>
+    mutate(rel_abund=mean_reads/sum(mean_reads)*100) |> ungroup()
+  top_taxa_c <- cond_df |>
+    group_by(name) |> summarise(m=mean(rel_abund),.groups="drop") |>
+    arrange(desc(m)) |> head(12) |> pull(name)
+  cond_df |>
+    mutate(taxon=ifelse(name %in% top_taxa_c, name, "Other")) |>
+    group_by(condition, taxon) |>
+    summarise(rel_abund=sum(rel_abund),.groups="drop") |>
+    ggplot(aes(x=condition, y=rel_abund, fill=taxon)) +
+    geom_col(position="stack", width=0.6) +
+    labs(title="Mean microbial composition by condition", x=NULL, y="Mean relative abundance (%)") +
+    theme_minimal(base_size=12) + theme(legend.text=element_text(size=8))
+} else cat("Microbial data not available.\n")
+```
+
+```{r meta-diversity}
+if (!is.null(meta_diversity)) {
+  meta_diversity |>
+    mutate(across(where(is.numeric), ~round(.,3)),
+           condition=conditions[sample_id]) |>
+    select(Sample=sample_id, Condition=condition,
+           any_of(c("shannon","richness"))) |>
+    knitr::kable(caption="Microbial alpha diversity metrics per sample.") |>
+    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+}
+```
+
+```{r meta-beta-pca, fig.height=5, fig.width=10, fig.cap="Beta diversity of microbial communities. Left: PCoA (Bray-Curtis dissimilarity) showing separation between samples. Right: heatmap of pairwise Bray-Curtis distances. With full data, tumor samples should cluster separately from normal if microbiome differs."}
+if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
+  sample_cols_b <- coldata$sample_id[coldata$sample_id %in% colnames(meta_abund)]
+  if (length(sample_cols_b) >= 3) {
+    mat_b <- as.matrix(meta_abund[, sample_cols_b])
+    # Bray-Curtis dissimilarity
+    bc_dist <- if (requireNamespace("vegan", quietly=TRUE)) {
+      as.matrix(vegan::vegdist(t(mat_b), method="bray"))
+    } else {
+      # Manual Bray-Curtis
+      n <- ncol(mat_b)
+      d <- matrix(0, n, n, dimnames=list(sample_cols_b, sample_cols_b))
+      for (i in 1:n) for (j in 1:n) {
+        d[i,j] <- sum(abs(mat_b[,i]-mat_b[,j])) / sum(mat_b[,i]+mat_b[,j]+1e-10)
+      }
+      d
+    }
+    # PCoA
+    pcoa <- cmdscale(bc_dist, k=2, eig=TRUE)
+    var_exp <- round(pcoa$eig[1:2]/sum(abs(pcoa$eig))*100, 1)
+    pcoa_df <- data.frame(
+      sample_id=rownames(pcoa$points),
+      PC1=pcoa$points[,1], PC2=pcoa$points[,2]
+    ) |> mutate(condition=conditions[sample_id])
+
+    p_pcoa <- ggplot(pcoa_df, aes(x=PC1, y=PC2,
+                                   color=condition, label=sample_id)) +
+      geom_point(size=5, alpha=0.9) +
+      ggrepel::geom_text_repel(size=3, show.legend=FALSE) +
+      scale_color_manual(values=col_cond, name=NULL) +
+      labs(title="PCoA - Bray-Curtis dissimilarity",
+           x=paste0("PC1 (",var_exp[1],"%)"),
+           y=paste0("PC2 (",var_exp[2],"%)")) +
+      theme_minimal(base_size=12)
+
+    p_heat <- bc_dist |> as.data.frame() |>
+      tibble::rownames_to_column("s1") |>
+      tidyr::pivot_longer(-s1, names_to="s2", values_to="dist") |>
+      ggplot(aes(x=s1, y=s2, fill=dist)) +
+      geom_tile() +
+      geom_text(aes(label=round(dist,2)), size=3) +
+      scale_fill_gradient(low="white", high="#E74C3C", name="BC dist") +
+      labs(title="Bray-Curtis distance matrix", x=NULL, y=NULL) +
+      theme_minimal(base_size=11) +
+      theme(axis.text.x=element_text(angle=30,hjust=1))
+
+    gridExtra::grid.arrange(p_pcoa, p_heat, ncol=2)
+  } else {
+    cat("Need >= 3 samples for beta diversity analysis.
+")
+  }
+} else cat("Microbial abundance data not available.\n")
+```
+
+## Functional Profiling (M20b — HUMAnN3)
+
+> HUMAnN3 profiles the functional capacity of microbial communities by mapping unmapped reads to the ChocoPhlAn nucleotide database and UniRef90 protein database. Outputs: gene family abundances (UniRef90 RPK), MetaCyc pathway abundances and coverage.
+
+> **Note (test data):** DEMO databases used — 0 gene families detected as expected. With full databases (ChocoPhlAn ~15GB + UniRef90 ~20GB) and real data, microbial metabolic pathways will appear here.
+
+```{r humann-pathways}
+if (!is.null(humann_paths) && nrow(humann_paths) > 0) {
+  df <- humann_paths
+  colnames(df) <- sub("_Unmapped[.]out_Abundance.*","", colnames(df))
+  colnames(df)[1] <- "Pathway"
+  df <- df[, !duplicated(colnames(df))]
+  df_top <- df |>
+    filter(!grepl("UNMAPPED|UNINTEGRATED", Pathway), !grepl("|", Pathway, fixed=TRUE)) |>
+    mutate(mean_abund=rowMeans(across(where(is.numeric)), na.rm=TRUE)) |>
+    arrange(desc(mean_abund)) |>
+    head(20)
+  if (nrow(df_top) > 0 && max(df_top$mean_abund, na.rm=TRUE) > 0) {
+    df_top |> select(-mean_abund) |>
+      DT::datatable(caption="Top 20 MetaCyc pathways (CPM).",
+                    options=list(pageLength=10, scrollX=TRUE), rownames=FALSE)
+  } else {
+    cat("No pathway abundance detected with DEMO databases.
+")
+    cat("With full ChocoPhlAn + UniRef90, microbial metabolic pathways will appear here.
+")
+  }
+} else {
+  cat("HUMAnN3 pathway data not available — run M20b.
+")
+}
+```
+
+```{r humann-genes}
+if (!is.null(humann_genes) && nrow(humann_genes) > 0) {
+  df_g <- humann_genes
+  colnames(df_g) <- sub("_Unmapped[.]out_Abundance.*","", colnames(df_g))
+  colnames(df_g)[1] <- "Gene_Family"
+  df_g <- df_g[, !duplicated(colnames(df_g))]
+  df_g_top <- df_g |>
+    filter(!grepl("UNMAPPED", Gene_Family), !grepl("|", Gene_Family, fixed=TRUE)) |>
+    mutate(mean_rpk=rowMeans(across(where(is.numeric)), na.rm=TRUE)) |>
+    arrange(desc(mean_rpk)) |>
+    head(20)
+  if (nrow(df_g_top) > 0 && max(df_g_top$mean_rpk, na.rm=TRUE) > 0) {
+    df_g_top |> select(-mean_rpk) |>
+      DT::datatable(caption="Top 20 gene families (RPK).",
+                    options=list(pageLength=10, scrollX=TRUE), rownames=FALSE)
+  } else {
+    cat("No gene families detected with DEMO databases.
+")
+  }
+} else {
+  cat("HUMAnN3 gene family data not available.
+")
+}
+```
+
+# TE Somatic Insertions (M23)
+
+> Soft-clipped sequences from STAR chimeric alignments were mapped to DFAM 3.9 TE consensus sequences using BWA-MEM. Clusters of TE-mapping clips at the same genomic locus represent candidate TE insertion sites. Somatic candidates = sites detected in tumor but not in normal samples.
+
+> **Note (test data):** With 100k reads, insufficient coverage to detect somatic insertions. With full data, L1, Alu and HERV somatic insertions in tumor will appear here.
+
+## Insertion Summary
+
+```{r te-insertion-summary}
+if (!is.null(te_ins_summary)) {
+  knitr::kable(te_ins_summary,
+    col.names=c("Metric","Count"),
+    caption="TE insertion detection summary (M23).") |>
+    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+} else cat("TE insertion summary not available.
+")
+```
+
+## Insertion Clusters
+```{r te-insertion-table}
+if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
+  # Convert Python bool strings to R logical
+  if ("somatic_candidate" %in% colnames(te_clusters) &&
+      is.character(te_clusters$somatic_candidate))
+    te_clusters$somatic_candidate <- te_clusters$somatic_candidate == "True"
+  te_clusters |>
+    arrange(desc(n_reads_total)) |>
+    head(50) |>
+    mutate(somatic = ifelse(somatic_candidate, "yes", "no")) |>
+    select(any_of(c("chrom","start","end","te_family","te_macro",
+                    "n_reads_total","n_normal","n_tumor",
+                    "somatic","gene_name","dist"))) |>
+    DT::datatable(
+      caption=sprintf("TE insertion clusters (%d total).", nrow(te_clusters)),
+      options=list(pageLength=15, scrollX=TRUE,
+                   dom="Bfrtip", buttons=c("csv","excel")),
+      extensions="Buttons", rownames=FALSE, filter="top")
+} else cat("TE insertion cluster data not available.\n")
+```
+
+```{r te-somatic-plot, fig.height=6, fig.width=10, fig.cap="TE insertion clusters by macrocategory and condition. Points sized by supporting read count. Somatic candidates (tumor-only) highlighted."}
+if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
+  te_clusters |>
+    filter(!is.na(te_macro)) |>
+    mutate(
+      candidate = ifelse(
+        (is.logical(somatic_candidate) & somatic_candidate) |
+        (is.character(somatic_candidate) & somatic_candidate == "True"),
+        "Somatic candidate", "Shared/normal"),
+      size_val  = n_reads_total
+    ) |>
+    ggplot(aes(x=te_macro, fill=candidate)) +
+    geom_bar(position="dodge") +
+    scale_fill_manual(values=c("Somatic candidate"="#E74C3C",
+                                "Shared/normal"="#85C1E9"),
+                      name=NULL) +
+    labs(title="TE insertion clusters by macrocategory",
+         x=NULL, y="Number of clusters") +
+    theme_minimal(base_size=12) +
+    theme(axis.text.x=element_text(angle=30,hjust=1))
+} else cat("TE cluster data not available.
+")
+```
+
+# Methods
+
+## Reference Data
+
+| Resource | Version/Date | Description |
+|----------|-------------|-------------|
+| GRCh38 | GENCODE v49 | Primary assembly, no patches |
+| Gene annotation | GENCODE v49 GTF | 78,691 loci |
+| TE consensus | DFAM 3.9 | 26,292 curated TE families |
+| Genomic TE coordinates | UCSC RepeatMasker hg38 (Oct 2022) | 4,519,330 entries |
+
+## Read Processing
+
+Reads trimmed with fastp 0.22.0 (auto adapter detection, Q20, min length 36bp). Genome alignment: STAR 2.7.10b two-pass mode with GENCODE v49 splice site annotation (`--twopassMode Basic`, `--outReadsUnmapped Fastx`). Strandedness inferred per-sample with RSeQC infer_experiment.py. Gene counts: featureCounts (subread 2.0.6), `-t exon -g gene_id -s 2 --fracOverlap 0.1 -p --countReadPairs`. circRNA detection: STAR chimeric alignments (`--chimOutType SeparateSAMold`, `--chimSegmentMin 20`) → CIRI2 v2.0.6. Unmapped reads classified taxonomically with Kraken2 v2.1.3 (k2_minusb database) + Bracken abundance estimation. RNA editing: JACUSA2 v2.1.16 call-2 (`-P RF-FIRSTSTRAND`, `-filterNH 1`). TE somatic insertions: soft-clipped sequences from STAR chimeric SAM aligned to DFAM 3.9 TE consensus with BWA-MEM 0.7.18.
+
+## TE Quantification — Pseudochromosome Approach
+
+DFAM 3.9 human-clade TE families concatenated into pseudochromosomes (200N spacers between families). Trimmed R1 and R2 reads mapped independently (Bowtie2 `--very-sensitive-local`, default score-min). Fragment counts deduplicated by read name to avoid double-counting. Satellites: separate pseudochromosome with analogous approach. Locus-level: TEtranscripts 2.2.3 (EM multi-mapping, RepeatMasker hg38 GTF) + custom pysam locus counter.
+
+## Differential Expression
+
+DESeq2 1.50.2. Size factors from stable genes (CV<0.3, baseMean>10; fallback: baseMean>10 when <500 stable genes found). LFC shrinkage: ashr. TE/satellite: `independentFiltering=FALSE`. circRNA (n<3 per group): Wilcoxon rank-sum, BH correction.
+
+## GO / Pathway Enrichment
+
+clusterProfiler: `enrichGO` (BP/MF/CC), `enrichKEGG` (KEGG REST API, hsa), `enrichDO` (DOSE, Disease Ontology). ENSEMBL → ENTREZ mapping via `bitr` (org.Hs.eg.db). Universe: expressed genes (baseMean>0) for canonical genes; 51,934 RepeatMasker-intersected genes for TE host analysis. Gene set size: 10–500.
+
+---
+
+# Session Info
+
+```{r session-info}
+sessionInfo()
+```

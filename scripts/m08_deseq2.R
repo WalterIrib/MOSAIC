@@ -1,0 +1,501 @@
+#!/usr/bin/env Rscript
+# =============================================================================
+# MOSAIC M08 — DESeq2 Differential Expression
+# Design Document v0.7
+#
+# Features:
+#   - sizeFactors from canonical stable genes (iterative, min 500)
+#   - independentFiltering=FALSE for TE and satellite
+#   - LFC shrinkage: ashr (default) or apeglm (simple 2-group only)
+#   - Simple mode: one comparison (condition A vs B)
+#   - Extended mode: all_pairwise with Bonferroni correction
+#   - Fallback: if stable genes < 500 -> WARNING + fallback to all canonical baseMean>10
+#
+# Usage:
+#   Rscript m08_deseq2.R \
+#     --counts      integrated/all_genes_counts_clean.tsv \
+#     --te-counts   integrated/te_counts_clean.tsv \
+#     --sat-counts  integrated/satellite_counts_clean.tsv \
+#     --coldata     samples.tsv \
+#     --outdir      deseq2_results/ \
+#     --lfc         1.0 \
+#     --padj        0.05 \
+#     --shrink      ashr \
+#     --mode        simple \
+#     --ref         normal
+# =============================================================================
+
+suppressPackageStartupMessages({
+  library(DESeq2)
+  library(optparse)
+})
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI arguments
+# ─────────────────────────────────────────────────────────────────────────────
+
+option_list <- list(
+  make_option("--counts",    type="character", help="all_genes_counts_clean.tsv"),
+  make_option("--te-counts", type="character", help="te_counts_clean.tsv"),
+  make_option("--sat-counts",type="character", help="satellite_counts_clean.tsv"),
+  make_option("--coldata",   type="character", help="samples.tsv (sample_id, condition)"),
+  make_option("--outdir",    type="character", help="Output directory"),
+  make_option("--lfc",       type="double",  default=1.0,   help="LFC threshold [default: 1.0]"),
+  make_option("--padj",      type="double",  default=0.05,  help="padj threshold [default: 0.05]"),
+  make_option("--shrink",    type="character", default="ashr", help="ashr|apeglm [default: ashr]"),
+  make_option("--mode",      type="character", default="simple", help="simple|extended"),
+  make_option("--ref",       type="character", default=NULL, help="Reference condition for contrast"),
+  make_option("--min-stable-genes", type="integer", default=500,
+              help="Min stable genes for sizeFactors [default: 500]")
+)
+
+opt <- parse_args(OptionParser(option_list=option_list))
+
+# Validate required args
+for (arg in c("counts", "coldata", "outdir")) {
+  if (is.null(opt[[arg]])) stop(paste("Missing required argument:", arg))
+}
+
+dir.create(opt$outdir, recursive=TRUE, showWarnings=FALSE)
+
+cat("\n========================================\n")
+cat("MOSAIC M08 — DESeq2\n")
+cat("========================================\n")
+cat(sprintf("  Counts:     %s\n", opt$counts))
+cat(sprintf("  Coldata:    %s\n", opt$coldata))
+cat(sprintf("  Outdir:     %s\n", opt$outdir))
+cat(sprintf("  LFC:        %.2f\n", opt$lfc))
+cat(sprintf("  padj:       %.3f\n", opt$padj))
+cat(sprintf("  Shrinkage:  %s\n", opt$shrink))
+cat(sprintf("  Mode:       %s\n", opt$mode))
+cat("\n")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Load data
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("[INF] Loading count matrix...\n")
+counts_raw <- read.table(opt$counts, header=TRUE, sep="\t",
+                         row.names=1, check.names=FALSE, comment.char="")
+
+# Remove annotation columns (gene_name, gene_type) if present
+# Keep only numeric columns
+numeric_cols <- sapply(counts_raw, is.numeric)
+anno_cols    <- counts_raw[, !numeric_cols, drop=FALSE]
+counts_mat   <- as.matrix(counts_raw[, numeric_cols, drop=FALSE])
+mode(counts_mat) <- "integer"
+
+cat(sprintf("[INF] Count matrix: %d genes x %d samples\n",
+            nrow(counts_mat), ncol(counts_mat)))
+
+# Load coldata
+cat("[INF] Loading sample metadata...\n")
+coldata <- read.table(opt$coldata, header=TRUE, sep="\t",
+                      row.names=1, check.names=FALSE)
+
+# Align coldata to count matrix columns
+common_samples <- intersect(colnames(counts_mat), rownames(coldata))
+if (length(common_samples) == 0) {
+  stop("No matching samples between count matrix and coldata!")
+}
+counts_mat <- counts_mat[, common_samples, drop=FALSE]
+coldata     <- coldata[common_samples, , drop=FALSE]
+coldata$condition <- factor(coldata$condition)
+
+cat(sprintf("[INF] Samples: %s\n", paste(common_samples, collapse=", ")))
+cat(sprintf("[INF] Conditions: %s\n",
+            paste(names(table(coldata$condition)), collapse=", ")))
+
+# Set reference condition
+if (!is.null(opt$ref)) {
+  if (opt$ref %in% levels(coldata$condition)) {
+    coldata$condition <- relevel(coldata$condition, ref=opt$ref)
+    cat(sprintf("[INF] Reference condition: %s\n", opt$ref))
+  } else {
+    cat(sprintf("[WRN] Reference '%s' not found. Using default.\n", opt$ref))
+  }
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SizeFactors from stable genes (iterative)
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("\n[INF] Computing sizeFactors from stable genes...\n")
+
+compute_stable_sizefactors <- function(counts_mat, coldata, min_stable=500) {
+  # Step 1: Run DESeq2 with default sizeFactors to get baseMean
+  dds_init <- DESeqDataSetFromMatrix(
+    countData = counts_mat,
+    colData   = coldata,
+    design    = ~condition
+  )
+  dds_init <- estimateSizeFactors(dds_init)
+  dds_init <- estimateDispersions(dds_init, quiet=TRUE)
+
+  # Step 2: Get normalized counts and CV
+  norm_counts <- counts(dds_init, normalized=TRUE)
+  base_mean   <- rowMeans(norm_counts)
+  cv          <- apply(norm_counts, 1, sd) / (base_mean + 1e-10)
+
+  # Step 3: Select stable genes
+  # Criteria: baseMean > 10, CV < 0.3 (low variability across samples)
+  stable_mask <- base_mean > 10 & cv < 0.3 & !is.na(cv)
+  n_stable    <- sum(stable_mask)
+
+  cat(sprintf("[INF] Stable genes (baseMean>10, CV<0.3): %d\n", n_stable))
+
+  if (n_stable < min_stable) {
+    cat(sprintf("[WRN] Stable genes (%d) < minimum (%d).\n", n_stable, min_stable))
+    cat("[WRN] Falling back to all canonical genes with baseMean>10.\n")
+
+    stable_mask <- base_mean > 10 & !is.na(base_mean)
+    n_stable    <- sum(stable_mask)
+    cat(sprintf("[INF] Fallback stable genes: %d\n", n_stable))
+  }
+
+  # Step 4: Recompute sizeFactors using only stable genes
+  stable_counts <- counts_mat[stable_mask, , drop=FALSE]
+  sf <- estimateSizeFactorsForMatrix(stable_counts)
+
+  cat(sprintf("[INF] SizeFactors: %s\n",
+              paste(sprintf("%.3f", sf), collapse=", ")))
+
+  return(list(sf=sf, n_stable=n_stable, stable_genes=rownames(counts_mat)[stable_mask]))
+}
+
+sf_result <- compute_stable_sizefactors(counts_mat, coldata,
+                                         min_stable=opt[["min-stable-genes"]])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Build DESeq2 dataset
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("\n[INF] Building DESeq2 dataset...\n")
+
+dds <- DESeqDataSetFromMatrix(
+  countData = counts_mat,
+  colData   = coldata,
+  design    = ~condition
+)
+
+# Apply stable-gene sizeFactors
+sizeFactors(dds) <- sf_result$sf
+
+# Run DESeq2 (skip sizeFactors estimation since we set them manually)
+dds <- DESeq(dds, fitType="parametric", quiet=FALSE)
+
+# Save stable genes list
+write.table(
+  data.frame(gene_id=sf_result$stable_genes),
+  file.path(opt$outdir, "stable_genes.tsv"),
+  sep="\t", row.names=FALSE, quote=FALSE
+)
+cat(sprintf("[INF] Stable genes saved: %d\n", sf_result$n_stable))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extract results
+# ─────────────────────────────────────────────────────────────────────────────
+
+run_contrast <- function(dds, contrast, shrink_method="ashr",
+                         lfc_threshold=1.0, padj_threshold=0.05,
+                         independent_filtering=TRUE, label="") {
+
+  cat(sprintf("\n[INF] Running contrast: %s\n", label))
+
+  # Get results
+  res <- results(dds,
+                 contrast=contrast,
+                 lfcThreshold=lfc_threshold,
+                 alpha=padj_threshold,
+                 independentFiltering=independent_filtering)
+
+  # LFC shrinkage
+  if (shrink_method == "apeglm") {
+    # apeglm requires coef, not contrast
+    coef_name <- resultsNames(dds)[length(resultsNames(dds))]
+    res_shrunk <- lfcShrink(dds, coef=coef_name, type="apeglm", quiet=TRUE)
+  } else {
+    res_shrunk <- lfcShrink(dds, contrast=contrast, type="ashr", quiet=TRUE)
+  }
+
+  # Merge original pvalue/padj with shrunken LFC
+  res_df <- as.data.frame(res)
+  res_df$log2FoldChange_shrunk <- as.data.frame(res_shrunk)$log2FoldChange
+  res_df$lfcSE_shrunk          <- as.data.frame(res_shrunk)$lfcSE
+  res_df$gene_id               <- rownames(res_df)
+
+  # Summary
+  n_up   <- sum(res_df$padj < padj_threshold &
+                res_df$log2FoldChange > lfc_threshold, na.rm=TRUE)
+  n_down <- sum(res_df$padj < padj_threshold &
+                res_df$log2FoldChange < -lfc_threshold, na.rm=TRUE)
+  cat(sprintf("[INF] %s: UP=%d, DOWN=%d\n", label, n_up, n_down))
+
+  return(res_df)
+}
+
+# Determine comparisons
+conditions <- levels(coldata$condition)
+cat(sprintf("\n[INF] Conditions: %s\n", paste(conditions, collapse=" vs ")))
+
+results_list <- list()
+
+if (opt$mode == "simple") {
+  # One contrast: condition A vs reference
+  ref_cond  <- levels(coldata$condition)[1]
+  test_cond <- levels(coldata$condition)[2]
+
+  contrast <- c("condition", test_cond, ref_cond)
+  label    <- paste0(test_cond, "_vs_", ref_cond)
+
+  res_df <- run_contrast(
+    dds, contrast,
+    shrink_method=opt$shrink,
+    lfc_threshold=opt$lfc,
+    padj_threshold=opt$padj,
+    independent_filtering=TRUE,
+    label=label
+  )
+  results_list[[label]] <- res_df
+
+} else {
+  # Extended: all pairwise with Bonferroni correction
+  pairs <- combn(conditions, 2, simplify=FALSE)
+  n_tests <- length(pairs)
+  cat(sprintf("[INF] Extended mode: %d pairwise comparisons\n", n_tests))
+
+  for (pair in pairs) {
+    test_cond <- pair[2]
+    ref_cond  <- pair[1]
+    contrast  <- c("condition", test_cond, ref_cond)
+    label     <- paste0(test_cond, "_vs_", ref_cond)
+
+    res_df <- run_contrast(
+      dds, contrast,
+      shrink_method=opt$shrink,
+      lfc_threshold=opt$lfc,
+      padj_threshold=opt$padj / n_tests,  # Bonferroni
+      independent_filtering=TRUE,
+      label=label
+    )
+    results_list[[label]] <- res_df
+  }
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TE and satellite DE (independentFiltering=FALSE)
+# ─────────────────────────────────────────────────────────────────────────────
+
+run_te_de <- function(te_tsv, sat_tsv, coldata, sf, outdir,
+                      lfc_threshold, padj_threshold, shrink_method, mode) {
+
+  run_te_contrast <- function(counts_mat, name_prefix, label,
+                               contrast, indep_filt=FALSE) {
+    if (nrow(counts_mat) == 0) return(NULL)
+
+    # Filter low counts
+    keep <- rowSums(counts_mat >= 1) >= ncol(counts_mat) / 2
+    counts_mat <- counts_mat[keep, , drop=FALSE]
+    if (nrow(counts_mat) == 0) return(NULL)
+
+    dds_te <- DESeqDataSetFromMatrix(
+      countData = counts_mat,
+      colData   = coldata,
+      design    = ~condition
+    )
+    sizeFactors(dds_te) <- sf
+    dds_te <- DESeq(dds_te, fitType="local", quiet=TRUE)
+
+    res <- results(dds_te,
+                   contrast=contrast,
+                   lfcThreshold=lfc_threshold,
+                   alpha=padj_threshold,
+                   independentFiltering=indep_filt)  # FALSE for TE/satellite
+
+    res_shrunk <- lfcShrink(dds_te, contrast=contrast,
+                             type="ashr", quiet=TRUE)
+
+    res_df <- as.data.frame(res)
+    res_df$log2FoldChange_shrunk <- as.data.frame(res_shrunk)$log2FoldChange
+    res_df$family_id <- rownames(res_df)
+
+    n_up   <- sum(res_df$padj < padj_threshold &
+                  res_df$log2FoldChange > lfc_threshold, na.rm=TRUE)
+    n_down <- sum(res_df$padj < padj_threshold &
+                  res_df$log2FoldChange < -lfc_threshold, na.rm=TRUE)
+    cat(sprintf("[INF] %s %s: UP=%d, DOWN=%d\n",
+                name_prefix, label, n_up, n_down))
+    return(res_df)
+  }
+
+  conditions <- levels(coldata$condition)
+
+  for (tsv_path in c(te_tsv, sat_tsv)) {
+    if (is.null(tsv_path) || !file.exists(tsv_path)) next
+
+    name_prefix <- ifelse(grepl("satellite", tsv_path), "satellite", "TE")
+    cat(sprintf("\n[INF] Running DE for %s...\n", name_prefix))
+
+    counts_raw <- read.table(tsv_path, header=TRUE, sep="\t",
+                             row.names=1, check.names=FALSE)
+    counts_mat <- as.matrix(counts_raw)
+    mode(counts_mat) <- "integer"
+
+    # Align samples
+    common <- intersect(colnames(counts_mat), rownames(coldata))
+    counts_mat <- counts_mat[, common, drop=FALSE]
+
+    if (mode == "simple") {
+      ref_cond  <- conditions[1]
+      test_cond <- conditions[2]
+      contrast  <- c("condition", test_cond, ref_cond)
+      label     <- paste0(test_cond, "_vs_", ref_cond)
+
+      res_df <- run_te_contrast(counts_mat, name_prefix, label,
+                                 contrast, indep_filt=FALSE)
+      if (!is.null(res_df)) {
+        out_f <- file.path(outdir,
+                           sprintf("%s_%s_DE.tsv", name_prefix, label))
+        write.table(res_df, out_f, sep="\t", quote=FALSE, row.names=FALSE)
+        cat(sprintf("[INF] Written: %s\n", basename(out_f)))
+      }
+    } else {
+      pairs <- combn(conditions, 2, simplify=FALSE)
+      for (pair in pairs) {
+        contrast <- c("condition", pair[2], pair[1])
+        label    <- paste0(pair[2], "_vs_", pair[1])
+        res_df   <- run_te_contrast(counts_mat, name_prefix, label,
+                                     contrast, indep_filt=FALSE)
+        if (!is.null(res_df)) {
+          out_f <- file.path(outdir,
+                             sprintf("%s_%s_DE.tsv", name_prefix, label))
+          write.table(res_df, out_f, sep="\t", quote=FALSE, row.names=FALSE)
+        }
+      }
+    }
+  }
+}
+
+cat("\n[INF] Running TE and satellite DE (independentFiltering=FALSE)...\n")
+run_te_de(
+  te_tsv=opt[["te-counts"]],
+  sat_tsv=opt[["sat-counts"]],
+  coldata=coldata,
+  sf=sf_result$sf,
+  outdir=opt$outdir,
+  lfc_threshold=opt$lfc,
+  padj_threshold=opt$padj,
+  shrink_method=opt$shrink,
+  mode=opt$mode
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Write canonical gene results
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("\n[INF] Writing results...\n")
+
+for (label in names(results_list)) {
+  res_df <- results_list[[label]]
+
+  # Sort by padj
+  res_df <- res_df[order(res_df$padj, na.last=TRUE), ]
+
+  out_f <- file.path(opt$outdir, sprintf("genes_%s_DE.tsv", label))
+  write.table(res_df, out_f, sep="\t", quote=FALSE, row.names=FALSE)
+  cat(sprintf("[INF] Written: %s (%d genes)\n", basename(out_f), nrow(res_df)))
+
+  # Significant subset
+  sig_df <- res_df[!is.na(res_df$padj) &
+                   res_df$padj < opt$padj &
+                   abs(res_df$log2FoldChange) > opt$lfc, ]
+  out_sig <- file.path(opt$outdir, sprintf("genes_%s_DE_significant.tsv", label))
+  write.table(sig_df, out_sig, sep="\t", quote=FALSE, row.names=FALSE)
+  cat(sprintf("[INF] Significant: %d genes (padj<%.3f, |LFC|>%.1f)\n",
+              nrow(sig_df), opt$padj, opt$lfc))
+}
+
+# Save normalized counts (DESeq2 size-factor corrected)
+norm_counts <- counts(dds, normalized=TRUE)
+write.table(
+  data.frame(gene_id=rownames(norm_counts), norm_counts, check.names=FALSE),
+  file.path(opt$outdir, "normalized_counts.tsv"),
+  sep="\t", row.names=FALSE, quote=FALSE
+)
+cat("[INF] Normalized counts saved.\n")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TPM (Transcripts Per Million)
+# Formula: TPM_i = (raw_i / gene_length_kb) / sum(raw_j / gene_length_kb) * 1e6
+# Gene lengths from featureCounts .summary or GTF exon union.
+# If gene lengths unavailable, estimate from GTF exon union via GenomicFeatures.
+# ─────────────────────────────────────────────────────────────────────────────
+cat("[INF] Computing TPM...\n")
+tryCatch({
+  gene_lengths <- NULL
+
+  # Try to load from featureCounts annotation columns (gene_id + Length col)
+  # featureCounts output has a "Length" column in the raw file
+  fc_raw_path <- gsub("_clean\\.tsv$", ".tsv",
+                       gsub("integrated", "mapping/counts",
+                            gsub("all_genes_counts_clean", "all_genes_counts", opt$counts)))
+  if (file.exists(fc_raw_path)) {
+    fc_raw <- tryCatch(
+      read.table(fc_raw_path, header=TRUE, sep="\t", comment.char="#",
+                 check.names=FALSE),
+      error=function(e) NULL)
+    if (!is.null(fc_raw) && "Length" %in% colnames(fc_raw)) {
+      gene_lengths <- setNames(as.numeric(fc_raw$Length), fc_raw$Geneid)
+      cat(sprintf("[INF] Gene lengths from featureCounts: %d genes\n",
+                  length(gene_lengths)))
+    }
+  }
+
+  # Fallback: estimate from GTF using GenomicFeatures (exon union)
+  if (is.null(gene_lengths) && requireNamespace("GenomicFeatures", quietly=TRUE)) {
+    cat("[INF] Estimating gene lengths from GTF (exon union)...\n")
+    library(GenomicFeatures)
+    gtf_path <- Sys.getenv("MOSAIC_GTF", "")
+    if (nchar(gtf_path) > 0 && file.exists(gtf_path)) {
+      txdb <- makeTxDbFromGFF(gtf_path, format="gtf")
+      exons_by_gene <- exonsBy(txdb, by="gene")
+      gene_lengths  <- sum(width(reduce(exons_by_gene)))
+      cat(sprintf("[INF] Gene lengths from GTF: %d genes\n", length(gene_lengths)))
+    }
+  }
+
+  if (!is.null(gene_lengths)) {
+    raw_counts  <- counts(dds, normalized=FALSE)
+    common_g    <- intersect(rownames(raw_counts), names(gene_lengths))
+    gl_kb       <- gene_lengths[common_g] / 1000
+    rpk         <- raw_counts[common_g, ] / gl_kb
+    tpm_mat     <- sweep(rpk, 2, colSums(rpk) / 1e6, "/")
+
+    write.table(
+      data.frame(gene_id=rownames(tpm_mat), tpm_mat, check.names=FALSE),
+      file.path(opt$outdir, "tpm_counts.tsv"),
+      sep="\t", row.names=FALSE, quote=FALSE
+    )
+    cat(sprintf("[INF] TPM saved: %d genes × %d samples\n",
+                nrow(tpm_mat), ncol(tpm_mat)))
+  } else {
+    cat("[WARN] Gene lengths not available — TPM not computed.\n")
+    cat("[WARN] Set MOSAIC_GTF env var or ensure featureCounts raw output is accessible.\n")
+  }
+}, error=function(e) {
+  cat("[WARN] TPM computation failed:", conditionMessage(e), "\n")
+})
+
+# Save session info
+sink(file.path(opt$outdir, "session_info.txt"))
+sessionInfo()
+sink()
+
+cat("\n[OK] M08 DESeq2 complete.\n")
+cat(sprintf("[OK] Results in: %s\n\n", opt$outdir))

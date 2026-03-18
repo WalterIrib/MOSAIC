@@ -1,0 +1,25 @@
+[M::bwa_idx_load_from_disk] read 0 ALT contigs
+[M::process] read 195478 sequences (28704938 bp)...
+[M::mem_pestat] # candidate unique pairs for (FF, FR, RF, RR): (22, 64991, 12, 9)
+[M::mem_pestat] analyzing insert size distribution for orientation FF...
+[M::mem_pestat] (25, 50, 75) percentile: (125, 272, 665)
+[M::mem_pestat] low and high boundaries for computing mean and std.dev: (1, 1745)
+[M::mem_pestat] mean and std.dev: (298.58, 246.95)
+[M::mem_pestat] low and high boundaries for proper pairs: (1, 2285)
+[M::mem_pestat] analyzing insert size distribution for orientation FR...
+[M::mem_pestat] (25, 50, 75) percentile: (247, 301, 391)
+[M::mem_pestat] low and high boundaries for computing mean and std.dev: (1, 679)
+[M::mem_pestat] mean and std.dev: (288.48, 94.42)
+[M::mem_pestat] low and high boundaries for proper pairs: (1, 823)
+[M::mem_pestat] analyzing insert size distribution for orientation RF...
+[M::mem_pestat] (25, 50, 75) percentile: (160, 1582, 3028)
+[M::mem_pestat] low and high boundaries for computing mean and std.dev: (1, 8764)
+[M::mem_pestat] mean and std.dev: (1651.75, 1639.40)
+[M::mem_pestat] low and high boundaries for proper pairs: (1, 11632)
+[M::mem_pestat] skip orientation RR as there are not enough pairs
+[M::mem_pestat] skip orientation FF
+[M::mem_pestat] skip orientation RF
+[M::mem_process_seqs] Processed 195478 reads in 27.567 CPU sec, 6.905 real sec
+[main] Version: 0.7.18-r1243-dirty
+[main] CMD: bwa mem -T 19 -t 4 /home/walter/Desktop/references/bwa_index/genome.fa /home/walter/Desktop/mosaic_output/trimmed/SRR19388325/SRR19388325_R1_trimmed.fastq.gz /home/walter/Desktop/mosaic_output/trimmed/SRR19388325/SRR19388325_R2_trimmed.fastq.gz
+[main] Real time: 8.828 sec; CPU: 29.422 sec

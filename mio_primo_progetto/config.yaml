@@ -1,0 +1,74 @@
+project:
+  name: my_project
+  wd: /path/to/workdir
+  organism: human        # human|mouse|rat|zebrafish|...
+  genome_build: hg38  # resolved automatically if 'auto'
+  random_seed: 42
+  biological_context: tumor  # tumor|aging|congenital|other
+
+library:
+  prep: rRNA_depletion   # REQUIRED. polyA causes BLOCKING ERROR.
+  layout: PE             # PE|SE
+
+reference_db:
+  path: /shared/reference_db
+  auto_update: false     # true: always update; false: ask (or skip on HPC)
+
+modules:
+  te_locus_specific: true
+  te_locus_tool: telescope   # telescope|squire
+  circrna: true
+  alt_splicing: true
+  de_novo: false             # controls --dta in HISAT2
+  microbial: false           # OPTIONAL — low signal in aging/congenital
+
+trimming:
+  min_phred: 20
+  min_length: 36
+  min_length_warning: 75
+  low_complexity_filter: false  # CRITICAL: always false (TE/satellite safety)
+  pe_correction: true
+  trim_poly_x: false            # CRITICAL: always false (satellite safety: TTAGGG, CATTC)
+  cut_right: true               # sliding window 3' quality trimming
+  cut_window_size: 4
+  cut_mean_quality: 20
+  disable_adapter_trimming: false  # set true for fusion-suspected tumors
+
+mapping:
+  bowtie2_score_min: 'L,0,1.6'
+  hisat2_dta: auto              # auto: enabled only when de_novo=true
+  hisat2_allow_discordant: true  # keep discordant pairs (useful for translocations)
+
+quality:
+  strandedness_concordance_threshold: 0.90  # <90% -> BLOCKING ERROR
+  min_reads_warning: 5000000
+  min_reads_error:   1000000
+  bam_mapping_rate_warning: 30
+  min_length_kraken: 75   # separate threshold for Kraken2 (k-mer sensitivity)
+
+circrna:
+  min_bsj_reads: 5
+  min_samples_per_group: all
+  de_test: auto  # auto: DESeq2 if median>10, Wilcoxon if <=10, excluded if =0
+
+de:
+  mode: simple           # simple|extended
+  lfc_threshold: 1.0
+  padj_threshold: 0.05
+  lfc_shrink_method: ashr    # ashr (default)|apeglm (simple 2-group only)
+  sizefactors_from: canonical_stable  # iterative — see design doc
+  sizefactors_min_stable_genes: 500   # fallback if too few stable genes
+  independent_filtering_te: false     # OFF for TE/satellite
+  extended:
+    interactions: false
+    all_pairwise: true
+    multiple_testing: bonferroni  # FWER control
+    timeseries: false
+    timeseries_mode: trend        # trend|pairwise
+    timeseries_splines_df: auto   # min(3, n_timepoints-1)
+    timeseries_clustering: mfuzz  # mfuzz|kmeans|hierarchical
+
+te:
+  go_universe: te_host_expressed  # genes hosting any expressed TE
+  batch_readlen_covariate: auto
+  promoter_window_upstream: 2000  # bp upstream TSS for proximal TE analysis

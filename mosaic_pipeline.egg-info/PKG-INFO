@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: mosaic-pipeline
+Version: 0.1.0
+Summary: Multi-layer Omni-transcriptomic Sequencing Analysis and Integrated Characterization
+Author: Walter Arancio
+Requires-Python: >=3.10
+Requires-Dist: click>=8.0
+Requires-Dist: PyYAML>=6.0
+Requires-Dist: requests>=2.28
+Dynamic: author
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

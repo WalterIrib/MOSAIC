@@ -1,0 +1,4 @@
+[console_scripts]
+mosaic = mosaic.cli:cli
+mosaic-refs = mosaic.cli:refs_cli
+mosaic-run = mosaic.cli:run_cli
