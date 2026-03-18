@@ -603,12 +603,17 @@ class ModuleRunner:
             "-s", s_flag,
         ] + (["-p", "--countReadPairs"] if cfg.library.layout == "PE" else []) + [
             "--fracOverlap", "0.1",
-            "--extraAttributes", "gene_name,gene_type",
         ] + bam_files,
             log_file=self._log("m08_featurecounts", comparison)
         )
         if ret != 0:
             return False
+
+        # Post-process featureCounts output:
+        # 1. Remove comment line (starts with #)
+        # 2. Rename BAM path columns to sample_ids
+        # 3. Keep only Geneid + count columns (drop Chr/Start/End/Strand/Length)
+        self._clean_featurecounts(counts_out)
 
         # DESeq2
         thresholds = cfg.thresholds
@@ -733,6 +738,48 @@ class ModuleRunner:
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 
+    def _clean_featurecounts(self, counts_file: Path) -> None:
+        """
+        Clean featureCounts output:
+        - Remove leading comment line (# Program:...)
+        - Replace full BAM paths with sample_ids
+        - Drop annotation columns (Chr, Start, End, Strand, Length)
+        """
+        lines = counts_file.read_text().splitlines()
+        # Skip comment lines
+        data_lines = [l for l in lines if not l.startswith("#")]
+        if not data_lines:
+            return
+
+        # Parse header — replace BAM paths with sample_ids
+        header = data_lines[0].split("\t")
+        # header = [Geneid, Chr, Start, End, Strand, Length, /path/bam1, ...]
+        # Find count column indices (BAM paths)
+        annot_cols = {"Geneid", "Chr", "Start", "End", "Strand", "Length"}
+        new_header = []
+        keep_idx = []
+        for i, col in enumerate(header):
+            if col in annot_cols:
+                if col == "Geneid":
+                    new_header.append(col)
+                    keep_idx.append(i)
+                # skip other annotation cols
+            else:
+                # BAM path -> extract sample_id from path
+                bam_path = Path(col)
+                sid = bam_path.stem.replace("_Aligned.sortedByCoord.out", "")
+                new_header.append(sid)
+                keep_idx.append(i)
+
+        # Rebuild file with cleaned header and only kept columns
+        out_lines = ["\t".join(new_header)]
+        for line in data_lines[1:]:
+            parts = line.split("\t")
+            out_lines.append("\t".join(parts[i] for i in keep_idx))
+
+        counts_file.write_text("\n".join(out_lines) + "\n")
+
+
     def _parse_comparison(self, comparison: Optional[str]) -> Optional[Tuple[str, str]]:
         if not comparison:
             # Use first comparison from config
@@ -756,18 +803,25 @@ class ModuleRunner:
 
     def _get_condition_bams(self, condition: str) -> List[str]:
         """Get BAM files for a specific condition."""
-        coldata = self.cfg.samples.coldata_df
-        sids = coldata[coldata["condition"] == condition]["sample_id"].tolist()
+        coldata = self.cfg.samples.coldata_df or []
+        sids = [r["sample_id"] for r in coldata
+                if r.get("condition") == condition]
         bam_dir = self.out / "mapping" / "bam"
         return [str(bam_dir / sid / f"{sid}_Aligned.sortedByCoord.out.bam")
                 for sid in sids]
 
     def _get_consensus_strandedness(self) -> str:
         strand_map = getattr(self.cfg, "_strandedness", {})
-        if not strand_map:
-            return self.cfg.library.strandedness or "RF"
-        from collections import Counter
-        return Counter(strand_map.values()).most_common(1)[0][0]
+        if strand_map:
+            from collections import Counter
+            return Counter(strand_map.values()).most_common(1)[0][0]
+        # Try strandedness from config
+        strand = (getattr(self.cfg.library, "strandedness", None) or
+                  getattr(self.cfg.library, "_strandedness_config", None) or
+                  getattr(self.cfg, "strandedness", None) or "RF")
+        if strand == "auto":
+            strand = "RF"
+        return strand
 
     def _write_coldata(self, comparison: str) -> Path:
         """Write coldata TSV for a specific comparison."""
@@ -776,13 +830,22 @@ class ModuleRunner:
             return Path(self.cfg.samples.coldata)
 
         treatment, control = comp
-        coldata_df = self.cfg.samples.coldata_df
-        subset = coldata_df[
-            coldata_df["condition"].isin([treatment, control])
-        ].copy()
+        coldata_rows = self.cfg.samples.coldata_df  # list of dicts
+        if not coldata_rows:
+            # Fallback to original coldata file
+            return Path(self.cfg.samples.coldata)
+
+        subset = [r for r in coldata_rows
+                  if r.get("condition") in (treatment, control)]
 
         out_path = self.out / f"coldata_{comparison}.tsv"
-        subset.to_csv(out_path, sep="\t", index=False)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if subset:
+            keys = list(subset[0].keys())
+            with open(out_path, "w") as fh:
+                fh.write("\t".join(keys) + "\n")
+                for row in subset:
+                    fh.write("\t".join(str(row.get(k,"")) for k in keys) + "\n")
         return out_path
 
 
