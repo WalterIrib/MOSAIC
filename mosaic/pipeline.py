@@ -736,6 +736,331 @@ class ModuleRunner:
         ], log_file=self._log("m14_report", comparison))
         return ret == 0
 
+
+    # ── M10: GO/KEGG enrichment ──────────────────────────────────────────────
+
+    def _run_m10_go(self, comparison=None) -> bool:
+        cfg  = self.cfg
+        comp = self._parse_comparison(comparison)
+        if not comp:
+            return False
+        treatment, control = comp
+        comp_dir = self._comparison_dir(comparison)
+        de_file  = comp_dir / "deseq2" / f"genes_{comparison}_DE.tsv"
+        if not de_file.exists():
+            warn(f"DE file not found: {de_file} — run m08_deseq2 first")
+            return False
+        out_dir = comp_dir / "go"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        comp_dir = self._comparison_dir(comparison)
+        all_genes = comp_dir / "deseq2" / "all_genes_counts.tsv"
+        te_de     = comp_dir / "deseq2" / f"TE_{comparison}_DE.tsv"
+        te_host   = self.out / "m11" / "te_host_universe.txt"
+        te_host_g = self.out / "m11" / "te_host_genes.tsv"
+        gene_map  = self.out / "integrated" / "gene_type_map.tsv"
+
+        args = [
+            "--de-genes",      str(de_file),
+            "--all-genes",     str(all_genes),
+            "--gene-type-map", str(gene_map),
+            "--outdir",        str(out_dir),
+            "--organism",      cfg.project.organism,
+            "--padj",          str(cfg.thresholds.padj),
+        ]
+        if te_de.exists():
+            args += ["--te-de", str(te_de)]
+        if te_host.exists():
+            args += ["--te-host-universe", str(te_host)]
+        if te_host_g.exists():
+            args += ["--te-host-genes", str(te_host_g)]
+
+        return run_r_script(self.scripts / "m10_go.R", args,
+                            log_file=self._log("m10_go", comparison)) == 0
+
+    # ── M16: StringTie de novo ───────────────────────────────────────────────
+
+    def _run_m16_stringtie(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        bam_dir = self.out / "mapping" / "bam"
+        out_dir = self.out / "m16_stringtie"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        comp    = self._parse_comparison(comparison)
+        if not comp:
+            return False
+        treatment, control = comp
+
+        # StringTie per-sample assembly
+        gtf = Path(cfg.databases.gtf)
+        for sid in cfg.samples.sample_ids:
+            bam = bam_dir / sid / f"{sid}_Aligned.sortedByCoord.out.bam"
+            if not bam.exists():
+                continue
+            sid_out = out_dir / sid
+            sid_out.mkdir(exist_ok=True)
+            ret = run_cmd([
+                "stringtie", str(bam),
+                "-G", str(gtf),
+                "-o", str(sid_out / f"{sid}.gtf"),
+                "-e", "-b", str(sid_out),
+                "-p", str(cfg.threads),
+            ], log_file=self._log("m16_stringtie_asm", sid))
+            if ret != 0:
+                warn(f"StringTie assembly failed for {sid}")
+
+        # Merge and DE analysis
+        comp_dir = self._comparison_dir(comparison)
+        de_file  = comp_dir / "deseq2" / f"genes_{comparison}_DE.tsv"
+        return run_r_script(self.scripts / "m16_stringtie_de.R", [
+            "--stringtie-dir", str(out_dir),
+            "--de-genes",      str(de_file),
+            "--gtf",           str(gtf),
+            "--outdir",        str(out_dir),
+            "--treatment",     treatment,
+            "--control",       control,
+            "--padj",          str(cfg.thresholds.padj),
+            "--lfc",           str(cfg.thresholds.lfc),
+        ], log_file=self._log("m16_stringtie_r", comparison)) == 0
+
+    # ── M17: rMATS (already defined above, keep stub) ───────────────────────
+
+    # ── M18: Network (STRINGdb + WGCNA) ────────────────────────────────────
+
+    def _run_m18_network(self, comparison=None) -> bool:
+        cfg      = self.cfg
+        comp     = self._parse_comparison(comparison)
+        if not comp:
+            return False
+        treatment, control = comp
+        comp_dir = self._comparison_dir(comparison)
+        de_file  = comp_dir / "deseq2" / f"genes_{comparison}_DE.tsv"
+        out_dir  = comp_dir / "m18"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return run_r_script(self.scripts / "m18_network.R", [
+            "--de-genes",    str(de_file),
+            "--norm-counts", str(comp_dir / "deseq2" / "normalized_counts.tsv"),
+            "--gene-map",    str(self.out / "integrated" / "gene_type_map.tsv"),
+            "--coldata",     str(self._write_coldata(comparison)),
+            "--outdir",      str(out_dir),
+            "--padj",        str(cfg.thresholds.padj),
+            "--lfc",         str(cfg.thresholds.lfc),
+        ], log_file=self._log("m18_network", comparison)) == 0
+
+    # ── M19: RNA editing ────────────────────────────────────────────────────
+
+    def _run_m19_editing(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        bam_dir = self.out / "mapping" / "bam"
+        out_dir = self.out / "m19_editing"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        comp    = self._parse_comparison(comparison)
+        if not comp:
+            return False
+        treatment, control = comp
+
+        normal_bams = self._get_condition_bams(control)
+        tumor_bams  = self._get_condition_bams(treatment)
+
+        ret = run_cmd([
+            "python", str(self.scripts.parent / "mosaic" / "m19_rna_editing.py"),
+            "--normal",     ",".join(normal_bams),
+            "--tumor",      ",".join(tumor_bams),
+            "--genome-fa",  str(Path(cfg.databases.genome_fa)),
+            "--gtf",        str(Path(cfg.databases.gtf)),
+            "--outdir",     str(out_dir),
+            "--threads",    str(cfg.threads),
+            "--min-cov",    str(cfg.thresholds.min_cov_editing),
+            "--min-score",  str(cfg.thresholds.min_score_editing),
+            "--min-ef",     str(cfg.thresholds.min_ef_editing),
+        ], log_file=self._log("m19_editing"))
+        if ret != 0:
+            return False
+
+        # R plots
+        return run_r_script(self.scripts / "m19_editing_plots.R", [
+            "--editing-dir", str(out_dir),
+            "--outdir",      str(out_dir),
+            "--treatment",   treatment,
+            "--control",     control,
+        ], log_file=self._log("m19_editing_r")) == 0
+
+    # ── M20: Metatranscriptomics (Kraken2/Bracken) ──────────────────────────
+
+    def _run_m20_meta(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        out_dir = self.out / "m20_metatranscriptomics"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        bam_dir = self.out / "mapping" / "bam"
+
+        for sid in cfg.samples.sample_ids:
+            unmapped_r1 = bam_dir / sid / f"{sid}_Unmapped.out.mate1"
+            if not unmapped_r1.exists():
+                warn(f"Unmapped reads not found for {sid} — was STAR run with --outReadsUnmapped Fastx?")
+                continue
+            sid_out = out_dir / sid
+            sid_out.mkdir(exist_ok=True)
+            # Kraken2
+            run_cmd([
+                "kraken2",
+                "--db",       str(Path(cfg.databases.kraken2_db)),
+                "--threads",  str(cfg.threads),
+                "--report",   str(sid_out / f"{sid}_kraken2_report.txt"),
+                "--output",   str(sid_out / f"{sid}_kraken2_output.txt"),
+                "--gzip-compressed",
+                str(unmapped_r1),
+            ], log_file=self._log("m20_kraken2", sid))
+
+        # R summary + diversity
+        return run_r_script(self.scripts / "m20_metatranscriptomics.R", [
+            "--meta-dir",  str(out_dir),
+            "--outdir",    str(out_dir),
+            "--coldata",   str(self._write_coldata(comparison)),
+            "--min-reads", str(cfg.thresholds.min_reads_meta),
+        ], log_file=self._log("m20_meta")) == 0
+
+    # ── M20b: HUMAnN3 functional profiling ──────────────────────────────────
+
+    def _run_m20b_humann(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        bam_dir = self.out / "mapping" / "bam"
+        out_dir = self.out / "m20_metatranscriptomics" / "humann3"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        env     = cfg.environments.humann or "humann3"
+
+        all_ok = True
+        for sid in cfg.samples.sample_ids:
+            unmapped = bam_dir / sid / f"{sid}_Unmapped.out.mate1"
+            if not unmapped.exists():
+                continue
+            sid_out = out_dir / sid
+            sid_out.mkdir(exist_ok=True)
+            ret = run_cmd([
+                "humann",
+                "--input",               str(unmapped),
+                "--output",              str(sid_out),
+                "--threads",             str(cfg.threads),
+                "--nucleotide-database", str(Path(cfg.databases.chocophlan_db)),
+                "--protein-database",    str(Path(cfg.databases.uniref_db)),
+            ], env_name=env, log_file=self._log("m20b_humann", sid))
+            if ret != 0:
+                all_ok = False
+
+        if not all_ok:
+            return False
+
+        # Merge tables
+        for table_type in ["pathabundance", "genefamilies", "pathcoverage"]:
+            for sid in cfg.samples.sample_ids:
+                src = out_dir / sid
+                for f in src.glob(f"*_{table_type}.tsv"):
+                    import shutil
+                    shutil.copy(f, out_dir / f"{sid}_{table_type}.tsv")
+            run_cmd([
+                "humann_join_tables",
+                "--input",   str(out_dir),
+                "--output",  str(out_dir / f"all_{table_type}.tsv"),
+                "--file_name", table_type,
+            ], env_name=env)
+
+        # Normalize
+        run_cmd([
+            "humann_renorm_table",
+            "--input",  str(out_dir / "all_pathabundance.tsv"),
+            "--output", str(out_dir / "all_pathabundance_cpm.tsv"),
+            "--units",  "cpm",
+        ], env_name=env)
+        return True
+
+    # ── M23: TE somatic insertions ───────────────────────────────────────────
+
+    def _run_m23_te_insertions(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        bam_dir = self.out / "mapping" / "bam"
+        out_dir = self.out / "m23_te_insertions"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        comp    = self._parse_comparison(comparison)
+        if not comp:
+            return False
+        treatment, control = comp
+
+        normal_chim = ",".join(
+            str(bam_dir / sid / f"{sid}_Chimeric.out.sam")
+            for sid in cfg.samples.get_condition_samples(control))
+        tumor_chim  = ",".join(
+            str(bam_dir / sid / f"{sid}_Chimeric.out.sam")
+            for sid in cfg.samples.get_condition_samples(treatment))
+
+        return run_cmd([
+            "python", str(self.scripts.parent / "mosaic" / "m23_te_insertions.py"),
+            "--chimeric-normal",  normal_chim,
+            "--chimeric-tumor",   tumor_chim,
+            "--te-consensus",     str(Path(cfg.databases.te_consensus)),
+            "--genome-fa",        str(Path(cfg.databases.genome_fa)),
+            "--gtf",              str(Path(cfg.databases.gtf)),
+            "--outdir",           str(out_dir),
+            "--threads",          str(cfg.threads),
+            "--min-clip",         str(cfg.thresholds.min_clip_te),
+            "--min-support",      str(cfg.thresholds.min_support_te),
+            "--min-mapq",         "0",
+        ], log_file=self._log("m23_te_insertions")) == 0
+
+    # ── M15: Fusion genes (Arriba) ───────────────────────────────────────────
+
+    def _run_m15_fusion(self, comparison=None) -> bool:
+        cfg     = self.cfg
+        bam_dir = self.out / "mapping" / "bam"
+        out_dir = self.out / "m15_fusions"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        arriba  = Path(cfg.databases.arriba_bin)
+        db      = Path(cfg.databases.arriba_db)
+
+        all_ok = True
+        for sid in cfg.samples.sample_ids:
+            bam  = bam_dir / sid / f"{sid}_Aligned.sortedByCoord.out.bam"
+            chim = bam_dir / sid / f"{sid}_Chimeric.out.sam"
+            if not bam.exists():
+                continue
+            cmd = [
+                str(arriba),
+                "-x", str(bam),
+                "-o", str(out_dir / f"{sid}_fusions.tsv"),
+                "-O", str(out_dir / f"{sid}_fusions_discarded.tsv"),
+                "-a", str(Path(cfg.databases.genome_fa)),
+                "-g", str(Path(cfg.databases.gtf)),
+                "-b", str(db / "blacklist_hg38_GRCh38_v2.4.0.tsv.gz"),
+                "-k", str(db / "known_fusions_hg38_GRCh38_v2.4.0.tsv.gz"),
+                "-t", str(db / "known_fusions_hg38_GRCh38_v2.4.0.tsv.gz"),
+                "-p", str(db / "protein_domains_hg38_GRCh38_v2.4.0.gff3"),
+            ]
+            if chim.exists():
+                cmd += ["-c", str(chim)]
+            ret = run_cmd(cmd, log_file=self._log("m15_fusion", sid))
+            if ret != 0:
+                all_ok = False
+
+        if not all_ok:
+            return False
+
+        # Merge all fusions
+        merged = out_dir / "fusions_merged.tsv"
+        header_written = False
+        with open(merged, "w") as fout:
+            for sid in cfg.samples.sample_ids:
+                f = out_dir / f"{sid}_fusions.tsv"
+                if not f.exists():
+                    continue
+                with open(f) as fin:
+                    for i, line in enumerate(fin):
+                        if i == 0:
+                            if not header_written:
+                                # Remove leading # from header
+                                fout.write(line.lstrip("#"))
+                                header_written = True
+                        else:
+                            if line.strip():
+                                fout.write(f"{sid}\t{line}")
+        return True
+
+
     # ── Helpers ──────────────────────────────────────────────────────────────
 
     def _clean_featurecounts(self, counts_file: Path) -> None:
