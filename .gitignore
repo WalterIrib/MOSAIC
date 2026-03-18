@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Logs
+*.log
+
+# Large data files
+*.bam
+*.sam
+*.fastq
+*.fastq.gz
+*.fa.gz
+*.gtf.gz
+
+# Output directories
+mosaic_output/
+mio_primo_progetto/
+
+# Temp
+.mosaic_state.json
