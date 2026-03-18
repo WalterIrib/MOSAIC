@@ -257,6 +257,13 @@ def _download_ena(accession: str, outdir: Path, threads: int) -> bool:
 
 def _download_sra(accession: str, outdir: Path, threads: int) -> bool:
     """Download from SRA using fasterq-dump."""
+    import shutil
+    if not shutil.which("fasterq-dump"):
+        warn("fasterq-dump not found. Install SRA-tools:")
+        warn("  conda install -c bioconda sra-tools -y")
+        warn("  OR: mosaic download --source ena instead")
+        return False
+
     info(f"Downloading from SRA: {accession}")
     ret = run_cmd([
         "fasterq-dump", accession,
@@ -266,9 +273,10 @@ def _download_sra(accession: str, outdir: Path, threads: int) -> bool:
         "--progress"
     ])
     if ret == 0:
-        # Compress
-        run_cmd(["pigz", "-p", str(threads)] +
-                [str(f) for f in outdir.glob(f"{accession}*.fastq")])
+        # Compress with pigz or gzip
+        compressor = "pigz" if shutil.which("pigz") else "gzip"
+        for f in outdir.glob(f"{accession}*.fastq"):
+            run_cmd([compressor] + (["-p", str(threads)] if compressor == "pigz" else []) + [str(f)])
     return ret == 0
 
 
