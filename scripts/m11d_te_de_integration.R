@@ -172,24 +172,30 @@ if (file.exists(gene_body_bed) && !is.null(opt[["rmsk-bed"]]) &&
     system(cmd2)
   }
 
+  te_body_genes <- NULL  # initialize before conditional
   if (file.exists(gene_body_intersect) &&
       file.info(gene_body_intersect)$size > 0) {
-    bed_body <- read.table(gene_body_intersect, header=FALSE, sep="\t",
-                           stringsAsFactors=FALSE, fill=TRUE)
-    # col4=TE name, col10=gene_id
-    te_body_genes <- bed_body |>
-      select(te_name=4, gene_id=10) |>
-      mutate(macro=classify_macro(te_name)) |>
-      group_by(gene_id) |>
-      summarise(
-        n_te_body_loci    = n(),
-        n_te_body_families= n_distinct(te_name),
-        te_body_macros    = paste(sort(unique(macro)), collapse=","),
-        .groups="drop"
-      )
-    cat(sprintf("[INF] Genes with body TE: %d\n", nrow(te_body_genes)))
-    write_tsv(te_body_genes,
-              file.path(opt$outdir, "te_body_genes.tsv"))
+    bed_body <- tryCatch(
+      read.table(gene_body_intersect, header=FALSE, sep="\t",
+                 stringsAsFactors=FALSE, fill=TRUE),
+      error=function(e) { cat("[WARN] body intersect read failed\n"); NULL }
+    )
+    if (!is.null(bed_body) && nrow(bed_body) > 0) {
+      # col4=TE name, col10=gene_id
+      te_body_genes <- bed_body |>
+        select(te_name=4, gene_id=10) |>
+        mutate(macro=classify_macro(te_name)) |>
+        group_by(gene_id) |>
+        summarise(
+          n_te_body_loci    = n(),
+          n_te_body_families= n_distinct(te_name),
+          te_body_macros    = paste(sort(unique(macro)), collapse=","),
+          .groups="drop"
+        )
+      cat(sprintf("[INF] Genes with body TE: %d\n", nrow(te_body_genes)))
+      write_tsv(te_body_genes,
+                file.path(opt$outdir, "te_body_genes.tsv"))
+    }
   }
 }
 
@@ -224,7 +230,7 @@ if (!is.null(te_body_genes))
 de_integrated <- de_integrated |>
   mutate(
     has_prom_te  = !is.na(n_te_prom_loci),
-    has_body_te  = !is.na(n_te_body_loci),
+    has_body_te  = if ("n_te_body_loci" %in% colnames(de_integrated)) !is.na(n_te_body_loci) else FALSE,
     te_category  = case_when(
       has_prom_te & has_body_te ~ "Promoter + Body TE",
       has_prom_te               ~ "Promoter TE only",
