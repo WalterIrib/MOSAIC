@@ -84,6 +84,9 @@ comp    <- p$comparison
 lfc_thr <- p$lfc_threshold
 padj_thr<- p$padj_threshold
 
+# Comparison-specific subdirectory (deseq2, go, m11d, m17_rmats, m18)
+comp_dir <- file.path(out, paste0("comparison_", comp))
+
 # ── Palette ───────────────────────────────────────────────────────────────────
 col_up   <- "#E74C3C"
 col_down <- "#3498DB"
@@ -100,14 +103,9 @@ col_macro <- c(
 )
 
 # ── Load data ─────────────────────────────────────────────────────────────────
-norm_counts <- safe_read(file.path(out,"deseq2","normalized_counts.tsv"),
-                          row.names=1)
-de_genes    <- safe_read(file.path(out,"deseq2",
-                          sprintf("genes_%s_DE.tsv", comp)))
+# Global (shared across comparisons)
 te_counts   <- safe_read(file.path(out,"integrated","te_counts_clean.tsv"))
 sat_counts  <- safe_read(file.path(out,"integrated","satellite_counts_clean.tsv"))
-te_de       <- safe_read(file.path(out,"deseq2",
-                          sprintf("TE_%s_DE.tsv", comp)))
 gene_map    <- safe_read(file.path(out,"integrated","gene_type_map.tsv"))
 coldata     <- safe_read("/tmp/coldata.tsv")
 circ_annot  <- safe_read(file.path(out,"circrna_merged","circrna_annotation.tsv"))
@@ -118,55 +116,21 @@ tet_sig     <- safe_read(file.path(out,"m12",
                           sprintf("%s_sigdiff_gene_TE.txt", comp)))
 trim_stats  <- safe_read(file.path(out,"trimmed","trim_stats.tsv"))
 strand_df   <- safe_read(file.path(out,"mapping","strandedness.tsv"))
-
-# QC plots from M08b
-pca_coords    <- safe_read(file.path(out, "deseq2/pca_coordinates.tsv"))
-tpm_counts    <- safe_read(file.path(out, "deseq2/tpm_counts.tsv"))
-
-# M11b promoter TE
 te_prom_genes   <- safe_read(file.path(out, "m11b/te_promoter_genes.tsv"))
 te_prom_summary <- safe_read(file.path(out, "m11b/te_promoter_summary.tsv"))
-
-# M11c TE age
 te_age_summary  <- safe_read(file.path(out, "m11c/te_age_summary.tsv"))
 te_age_de_tbl   <- safe_read(file.path(out, "m11c/te_age_de_table.tsv"))
-
-# M11d DE-TE integration
-de_te_integrated   <- safe_read(file.path(out, "m11d/de_te_integrated.tsv"))
-te_enrich_fisher   <- safe_read(file.path(out, "m11d/te_enrichment_fisher.tsv"))
-macro_enrich       <- safe_read(file.path(out, "m11d/promoter_te_macro_enrichment.tsv"))
-go_prom_te_bp      <- safe_read(file.path(out, "m11d/go_prom_TE_DE_BP.tsv"))
-go_prom_te_mf      <- safe_read(file.path(out, "m11d/go_prom_TE_DE_MF.tsv"))
-go_body_te_bp      <- safe_read(file.path(out, "m11d/go_body_TE_DE_BP.tsv"))
-
-# M16 StringTie de novo
 st_summary      <- safe_read(file.path(out, "m16_stringtie/stringtie_summary.tsv"))
 st_class_codes  <- safe_read(file.path(out, "m16_stringtie/class_code_summary.tsv"))
 novel_de        <- safe_read(file.path(out, "m16_stringtie/novel_transcript_DE.tsv"))
 novel_fpkm      <- safe_read(file.path(out, "m16_stringtie/novel_transcript_fpkm.tsv"))
-
-# M17 rMATS splicing
-splicing_summary<- safe_read(file.path(out, "m17_rmats/splicing_summary.tsv"))
-sig_splicing    <- safe_read(file.path(out, "m17_rmats/significant_splicing_events.tsv"))
-top_se          <- safe_read(file.path(out, "m17_rmats/top_SE_events.tsv"))
-top_a3ss        <- safe_read(file.path(out, "m17_rmats/top_A3SS_events.tsv"))
-top_a5ss        <- safe_read(file.path(out, "m17_rmats/top_A5SS_events.tsv"))
-top_mxe         <- safe_read(file.path(out, "m17_rmats/top_MXE_events.tsv"))
-top_ri          <- safe_read(file.path(out, "m17_rmats/top_RI_events.tsv"))
-spliced_de      <- safe_read(file.path(out, "m17_rmats/spliced_and_de_overlap.tsv"))
-
-# M19 RNA editing
 editing_sites   <- safe_read(file.path(out, "m19_editing/editing_sites_ato_i.tsv"))
 editing_summary <- safe_read(file.path(out, "m19_editing/editing_summary.tsv"))
 editing_per_gene<- safe_read(file.path(out, "m19_editing/editing_per_gene.tsv"))
-
-# M20 Metatranscriptomics
 meta_summary    <- safe_read(file.path(out, "m20_metatranscriptomics/kraken2_classification_summary.tsv"))
 meta_abund      <- safe_read(file.path(out, "m20_metatranscriptomics/microbial_abundance_matrix.tsv"))
 meta_diff       <- safe_read(file.path(out, "m20_metatranscriptomics/microbial_differential_abundance.tsv"))
 meta_diversity  <- safe_read(file.path(out, "m20_metatranscriptomics/alpha_diversity.tsv"))
-
-# M23 TE somatic insertions
 te_clusters     <- tryCatch(
   read.table(file.path(out, "m23_te_insertions/te_insertion_clusters.tsv"),
              header=TRUE, sep="\t", stringsAsFactors=FALSE, fill=TRUE,
@@ -174,42 +138,56 @@ te_clusters     <- tryCatch(
   error=function(e) NULL)
 te_somatic      <- safe_read(file.path(out, "m23_te_insertions/somatic_te_insertions.tsv"))
 te_ins_summary  <- safe_read(file.path(out, "m23_te_insertions/insertion_summary.tsv"))
-
-# M20b HUMAnN3 functional profiling
-humann_paths   <- safe_read(file.path(out, "m20_metatranscriptomics/humann3/all_pathabundance_cpm.tsv"),
-                             comment.char="#")
-humann_genes   <- safe_read(file.path(out, "m20_metatranscriptomics/humann3/all_genefamilies.tsv"),
-                             comment.char="#")
-
-# M15 fusions
+humann_paths    <- safe_read(file.path(out, "m20_metatranscriptomics/humann3/all_pathabundance_cpm.tsv"),
+                              comment.char="#")
+humann_genes    <- safe_read(file.path(out, "m20_metatranscriptomics/humann3/all_genefamilies.tsv"),
+                              comment.char="#")
 fusion_merged   <- safe_read(file.path(out, "m15_fusions/fusions_merged.tsv"))
 
-# M18 network
-string_hubs     <- safe_read(file.path(out, "m18/string_hub_genes.tsv"))
-wgcna_modules   <- safe_read(file.path(out, "m18/wgcna_module_genes.tsv"))
-wgcna_mt_cor    <- safe_read(file.path(out, "m18/wgcna_module_trait_correlation.tsv"))
-
-# GO files
-# GO — canonical genes UP / DOWN / ALL
-go_up_bp   <- safe_read(file.path(out,"go","genes_UP_GO_BP.tsv"))
-go_up_mf   <- safe_read(file.path(out,"go","genes_UP_GO_MF.tsv"))
-go_up_cc   <- safe_read(file.path(out,"go","genes_UP_GO_CC.tsv"))
-go_up_kegg <- safe_read(file.path(out,"go","genes_UP_KEGG.tsv"))
-go_up_do   <- safe_read(file.path(out,"go","genes_UP_DO.tsv"))
-go_dn_bp   <- safe_read(file.path(out,"go","genes_DOWN_GO_BP.tsv"))
-go_dn_mf   <- safe_read(file.path(out,"go","genes_DOWN_GO_MF.tsv"))
-go_dn_cc   <- safe_read(file.path(out,"go","genes_DOWN_GO_CC.tsv"))
-go_dn_kegg <- safe_read(file.path(out,"go","genes_DOWN_KEGG.tsv"))
-go_dn_do   <- safe_read(file.path(out,"go","genes_DOWN_DO.tsv"))
-go_all_bp  <- safe_read(file.path(out,"go","genes_ALL_GO_BP.tsv"))
-go_all_mf  <- safe_read(file.path(out,"go","genes_ALL_GO_MF.tsv"))
-go_all_cc  <- safe_read(file.path(out,"go","genes_ALL_GO_CC.tsv"))
-go_all_kegg<- safe_read(file.path(out,"go","genes_ALL_KEGG.tsv"))
-go_all_do  <- safe_read(file.path(out,"go","genes_ALL_DO.tsv"))
-# GO — TE host genes
-go_te_bp <- safe_read(file.path(out,"go","TE_host_GO_BP.tsv"))
-go_te_mf <- safe_read(file.path(out,"go","TE_host_GO_MF.tsv"))
-go_te_cc <- safe_read(file.path(out,"go","TE_host_GO_CC.tsv"))
+# Comparison-specific (in comparison_{comp}/ subdir)
+norm_counts <- safe_read(file.path(comp_dir,"deseq2","normalized_counts.tsv"),
+                          row.names=1)
+de_genes    <- safe_read(file.path(comp_dir,"deseq2",
+                          sprintf("genes_%s_DE.tsv", comp)))
+te_de       <- safe_read(file.path(comp_dir,"deseq2",
+                          sprintf("TE_%s_DE.tsv", comp)))
+pca_coords    <- safe_read(file.path(comp_dir, "deseq2/pca_coordinates.tsv"))
+tpm_counts    <- safe_read(file.path(comp_dir, "deseq2/tpm_counts.tsv"))
+de_te_integrated   <- safe_read(file.path(comp_dir, "m11d/de_te_integrated.tsv"))
+te_enrich_fisher   <- safe_read(file.path(comp_dir, "m11d/te_enrichment_fisher.tsv"))
+macro_enrich       <- safe_read(file.path(comp_dir, "m11d/promoter_te_macro_enrichment.tsv"))
+go_prom_te_bp      <- safe_read(file.path(comp_dir, "m11d/go_prom_TE_DE_BP.tsv"))
+go_prom_te_mf      <- safe_read(file.path(comp_dir, "m11d/go_prom_TE_DE_MF.tsv"))
+go_body_te_bp      <- safe_read(file.path(comp_dir, "m11d/go_body_TE_DE_BP.tsv"))
+splicing_summary<- safe_read(file.path(comp_dir, "m17_rmats/splicing_summary.tsv"))
+sig_splicing    <- safe_read(file.path(comp_dir, "m17_rmats/significant_splicing_events.tsv"))
+top_se          <- safe_read(file.path(comp_dir, "m17_rmats/top_SE_events.tsv"))
+top_a3ss        <- safe_read(file.path(comp_dir, "m17_rmats/top_A3SS_events.tsv"))
+top_a5ss        <- safe_read(file.path(comp_dir, "m17_rmats/top_A5SS_events.tsv"))
+top_mxe         <- safe_read(file.path(comp_dir, "m17_rmats/top_MXE_events.tsv"))
+top_ri          <- safe_read(file.path(comp_dir, "m17_rmats/top_RI_events.tsv"))
+spliced_de      <- safe_read(file.path(comp_dir, "m17_rmats/spliced_and_de_overlap.tsv"))
+string_hubs     <- safe_read(file.path(comp_dir, "m18/string_hub_genes.tsv"))
+wgcna_modules   <- safe_read(file.path(comp_dir, "m18/wgcna_module_genes.tsv"))
+wgcna_mt_cor    <- safe_read(file.path(comp_dir, "m18/wgcna_module_trait_correlation.tsv"))
+go_up_bp   <- safe_read(file.path(comp_dir,"go","genes_UP_GO_BP.tsv"))
+go_up_mf   <- safe_read(file.path(comp_dir,"go","genes_UP_GO_MF.tsv"))
+go_up_cc   <- safe_read(file.path(comp_dir,"go","genes_UP_GO_CC.tsv"))
+go_up_kegg <- safe_read(file.path(comp_dir,"go","genes_UP_KEGG.tsv"))
+go_up_do   <- safe_read(file.path(comp_dir,"go","genes_UP_DO.tsv"))
+go_dn_bp   <- safe_read(file.path(comp_dir,"go","genes_DOWN_GO_BP.tsv"))
+go_dn_mf   <- safe_read(file.path(comp_dir,"go","genes_DOWN_GO_MF.tsv"))
+go_dn_cc   <- safe_read(file.path(comp_dir,"go","genes_DOWN_GO_CC.tsv"))
+go_dn_kegg <- safe_read(file.path(comp_dir,"go","genes_DOWN_KEGG.tsv"))
+go_dn_do   <- safe_read(file.path(comp_dir,"go","genes_DOWN_DO.tsv"))
+go_all_bp  <- safe_read(file.path(comp_dir,"go","genes_ALL_GO_BP.tsv"))
+go_all_mf  <- safe_read(file.path(comp_dir,"go","genes_ALL_GO_MF.tsv"))
+go_all_cc  <- safe_read(file.path(comp_dir,"go","genes_ALL_GO_CC.tsv"))
+go_all_kegg<- safe_read(file.path(comp_dir,"go","genes_ALL_KEGG.tsv"))
+go_all_do  <- safe_read(file.path(comp_dir,"go","genes_ALL_DO.tsv"))
+go_te_bp <- safe_read(file.path(comp_dir,"go","TE_host_GO_BP.tsv"))
+go_te_mf <- safe_read(file.path(comp_dir,"go","TE_host_GO_MF.tsv"))
+go_te_cc <- safe_read(file.path(comp_dir,"go","TE_host_GO_CC.tsv"))
 
 # ── Sample / condition maps ───────────────────────────────────────────────────
 sample_ids <- if (!is.null(coldata)) coldata$sample_id else character(0)
@@ -221,6 +199,11 @@ conditions <- if (!is.null(coldata)) {
 gene_names <- if (!is.null(gene_map)) {
   setNames(gene_map$gene_name, gene_map$gene_id)
 } else character(0)
+
+label_gene <- function(ids) {
+  nm <- gene_names[ids]
+  ifelse(!is.na(nm) & nzchar(nm), nm, ids)
+}
 
 # ── DE significant subsets ────────────────────────────────────────────────────
 de_sig <- if (!is.null(de_genes)) {

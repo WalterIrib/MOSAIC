@@ -9,6 +9,7 @@ databases:
   db_root: /home/walter/Desktop/references
   genome_fa: /home/walter/Desktop/references/GRCh38.primary_assembly.genome.fa
   gtf: /home/walter/Desktop/references/gencode.v49.annotation.gtf
+  gtf_bed12: /home/walter/Desktop/mosaic/mosaic_output/mapping/annotation/genes.bed12
   kraken2_db: /home/walter/Desktop/references/kraken2_db
   metaphlan_db: /home/walter/Desktop/references/humann3_db/metaphlan_db
   rmsk_bed: /home/walter/Desktop/references/rmsk/rmsk.txt.gz
@@ -33,6 +34,7 @@ modules:
   m06_circrna: true
   m07_strandedness: true
   m08_deseq2: true
+  m08b_qc: true
   m09_satellite: true
   m10_go: true
   m11_te_host: true
