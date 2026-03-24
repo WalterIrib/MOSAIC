@@ -673,18 +673,27 @@ class ModuleRunner:
         out_trim.mkdir(parents=True, exist_ok=True)
         layout    = cfg.library.layout  # PE | SE
 
+        # Build R1/R2 lookup from coldata when available (flat FASTQ dirs)
+        coldata_fq = {}
+        for row in (cfg.samples.coldata_df or []):
+            sid = row.get("sample_id", "")
+            if row.get("R1") and row.get("R2"):
+                coldata_fq[sid] = (Path(row["R1"]), Path(row["R2"]))
+
         all_ok = True
         for sid in cfg.samples.sample_ids:
             out_sid = out_trim / sid
             out_sid.mkdir(exist_ok=True)
 
             if layout == "PE":
-                r1 = fastq_dir / sid / f"{sid}_R1.fastq.gz"
-                r2 = fastq_dir / sid / f"{sid}_R2.fastq.gz"
-                # Try alternative naming
-                if not r1.exists():
-                    r1 = fastq_dir / sid / f"{sid}_1.fastq.gz"
-                    r2 = fastq_dir / sid / f"{sid}_2.fastq.gz"
+                if sid in coldata_fq and coldata_fq[sid][0].exists():
+                    r1, r2 = coldata_fq[sid]
+                else:
+                    r1 = fastq_dir / sid / f"{sid}_R1.fastq.gz"
+                    r2 = fastq_dir / sid / f"{sid}_R2.fastq.gz"
+                    if not r1.exists():
+                        r1 = fastq_dir / sid / f"{sid}_1.fastq.gz"
+                        r2 = fastq_dir / sid / f"{sid}_2.fastq.gz"
                 cmd = [
                     "fastp",
                     "-i", str(r1), "-I", str(r2),
@@ -697,7 +706,10 @@ class ModuleRunner:
                     "-q", "20", "-l", "36"
                 ]
             else:
-                r1 = fastq_dir / sid / f"{sid}.fastq.gz"
+                if sid in coldata_fq and coldata_fq[sid][0].exists():
+                    r1 = coldata_fq[sid][0]
+                else:
+                    r1 = fastq_dir / sid / f"{sid}.fastq.gz"
                 cmd = [
                     "fastp",
                     "-i", str(r1),
