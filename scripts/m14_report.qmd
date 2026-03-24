@@ -1170,12 +1170,7 @@ if (!is.null(te_host) && !is.null(de_genes)) {
                                          de_genes$padj < padj_thr]
 
   if (length(de_gene_ids) == 0) {
-    # Relaxed fallback for test data
-    de_gene_ids <- de_genes[[gid_col_de]][!is.na(de_genes$padj) &
-                                           de_genes$padj < 0.5]
-    cat(sprintf("[Note] Using padj<0.5 fallback: %d DE genes
-",
-                length(de_gene_ids)))
+    de_gene_ids <- character(0)
   }
 
   # Join DE genes with TE host table
@@ -1232,9 +1227,6 @@ if (!is.null(te_host) && !is.null(de_genes)) {
 
 ## TE Insertions in DE Gene Promoters and Gene Bodies (M11b/M11d)
 
-> **Note (test data):** Results shown use a relaxed threshold (padj<0.5, |LFC|>0.5) 
-> to enable pipeline validation. With full-depth data, standard thresholds 
-> (padj<0.05, |LFC|>1) will be applied automatically.
 
 ### Overview: Genes with Promoter TE Insertions
 
@@ -1537,7 +1529,6 @@ if (!is.null(tet_sig) && nrow(tet_sig) > 0) {
 
 > StringTie assembled transcripts de novo from STAR-aligned BAM files, then merged across samples and compared to GENCODE v49 using gffcompare. Novel transcripts were quantified with `-e -b` and tested for differential expression using DESeq2 (proxy counts from FPKM x 10).
 
-> **Note (test data):** Thresholds padj<0.5, |LFC|>0.5, min-cov=0.1 used for pipeline validation. Production: padj<0.05, |LFC|>1.0, min-cov=1.0.
 
 ## Assembly Summary
 
@@ -1647,7 +1638,6 @@ if (!is.null(novel_de) && nrow(novel_de) > 0) {
 
 > rMATS quantified five classes of alternative splicing events from STAR-aligned BAM files: Skipped Exon (SE), Alternative 3'/5' Splice Site (A3SS/A5SS), Mutually Exclusive Exons (MXE), and Retained Intron (RI). deltaPSI = PSI(treatment) - PSI(control), where PSI (Percent Spliced In) ranges from 0 to 1.
 
-> **Note (test data):** Run with `--statoff` (2 replicates) — events filtered by |dPSI|>0.1 only, no FDR available. Production: re-run rMATS without `--statoff` (>=3 replicates) and apply FDR<0.05.
 
 ## Event Summary
 
@@ -1828,7 +1818,7 @@ if (!is.null(sig_splicing) && nrow(sig_splicing) > 0) {
            PSI_ctrl=psi_control, PSI_trt=psi_treatment,
            Reads=jc_reads_total, FDR=fdr) |>
     DT::datatable(
-      caption=sprintf("All significant splicing events (%d total). dPSI = PSI(%s) - PSI(%s). FDR: N/A when run with --statoff (test data).",
+      caption=sprintf("All significant splicing events (%d total). dPSI = PSI(%s) - PSI(%s).",
                       nrow(sig_splicing), p$treatment, p$control),
       options=list(pageLength=20, scrollX=TRUE,
                    dom="Bfrtip", buttons=c("csv","excel")),
@@ -1849,8 +1839,6 @@ if (!is.null(spliced_de) && nrow(spliced_de) > 0) {
     kable_styling(bootstrap_options=c("striped","condensed"))
 } else {
   cat("No genes with both significant splicing and DE at current thresholds.
-")
-  cat("(Expected with test data - low statistical power)
 ")
 }
 ```
@@ -1992,7 +1980,6 @@ if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0) {
 
 > A-to-I RNA editing detected via JACUSA2 call-2 comparing normal vs tumor BAM files. A-to-I editing (adenosine-to-inosine, read as guanosine) is catalysed by ADAR enzymes and is dysregulated in many cancers.
 
-> **Note (test data):** Thresholds relaxed (min-cov=3, min-score=0.5, min-ef=0.01). Production: min-cov=5, min-score=1.5, min-ef=0.05, plus DirMult:PHRED statistical model.
 
 ## Editing Summary
 
@@ -2044,7 +2031,6 @@ if (!is.null(editing_per_gene) && nrow(editing_per_gene) > 0) {
 
 > Reads not mapping to the human reference genome (STAR unmapped) were classified taxonomically using Kraken2 v2.1.3 with the k2_minusb database. Bracken estimated species-level abundances. Homo sapiens reads excluded from microbial analysis.
 
-> **Note (test data):** Very few unmapped reads (588-2671 per sample). With full data, this section will reveal viral, bacterial or fungal signatures in tumor vs normal.
 
 ## Classification Summary
 
@@ -2191,7 +2177,6 @@ if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
 
 > HUMAnN3 profiles the functional capacity of microbial communities by mapping unmapped reads to the ChocoPhlAn nucleotide database and UniRef90 protein database. Outputs: gene family abundances (UniRef90 RPK), MetaCyc pathway abundances and coverage.
 
-> **Note (test data):** DEMO databases used — 0 gene families detected as expected. With full databases (ChocoPhlAn ~15GB + UniRef90 ~20GB) and real data, microbial metabolic pathways will appear here.
 
 ```{r humann-pathways}
 if (!is.null(humann_paths) && nrow(humann_paths) > 0) {
@@ -2249,7 +2234,6 @@ if (!is.null(humann_genes) && nrow(humann_genes) > 0) {
 
 > Soft-clipped sequences from STAR chimeric alignments were mapped to DFAM 3.9 TE consensus sequences using BWA-MEM. Clusters of TE-mapping clips at the same genomic locus represent candidate TE insertion sites. Somatic candidates = sites detected in tumor but not in normal samples.
 
-> **Note (test data):** With 100k reads, insufficient coverage to detect somatic insertions. With full data, L1, Alu and HERV somatic insertions in tumor will appear here.
 
 ## Insertion Summary
 

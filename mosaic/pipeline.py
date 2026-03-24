@@ -594,6 +594,70 @@ class ModuleRunner:
                 all_ok = False
         return all_ok
 
+    # ── M05: TE/Satellite fragment counting ──────────────────────────────────
+
+    def _run_m05_te_count(self, comparison=None) -> bool:
+        from .m05_te_count import run_m05
+        cfg      = self.cfg
+        trim_dir = self.out / "trimmed"
+        out_dir  = self.out / "te_counts"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        te_fa  = Path(cfg.databases.get("te_consensus",
+                      str(Path(cfg.databases.te_satellite).parent / "consensus_TE.fa")))
+        sat_fa = Path(cfg.databases.te_satellite)
+
+        # Build bowtie2 index names (stem without extension)
+        te_idx  = str(te_fa.parent / te_fa.stem)
+        sat_idx = str(sat_fa.parent / sat_fa.stem)
+
+        # Build TE index if missing
+        import shutil as _shutil
+        if not Path(f"{te_idx}.1.bt2").exists() and not Path(f"{te_idx}.1.bt2l").exists():
+            info("Building bowtie2 index for TE consensus...")
+            run_cmd(["bowtie2-build", str(te_fa), te_idx,
+                     "--threads", str(min(cfg.threads, 8))])
+
+        # Read trim_stats to get per-sample FASTQ paths
+        trim_stats_f = trim_dir / "trim_stats.tsv"
+        if not trim_stats_f.exists():
+            warn("trim_stats.tsv not found — run m02_trim first")
+            return False
+        import csv as _csv
+        with open(trim_stats_f) as fh:
+            trim_stats = list(_csv.DictReader(fh, delimiter="\t"))
+
+        # Filter to samples that have trimmed FASTQs
+        valid = [s for s in trim_stats if Path(s.get("r1_trimmed","")).exists()]
+        if not valid:
+            warn("No trimmed FASTQs found — run m02_trim first")
+            return False
+
+        class_tsv = Path(cfg.databases.get("te_classification",
+                         str(te_fa.parent / "classification.tsv")))
+
+        run_m05(
+            trim_stats   = valid,
+            te_index     = te_idx,
+            satellite_index = sat_idx,
+            classification_tsv = str(class_tsv) if class_tsv.exists() else "",
+            out_dir      = out_dir,
+            threads      = cfg.threads,
+        )
+
+        # Copy matrices to integrated/
+        integrated = self.out / "integrated"
+        integrated.mkdir(exist_ok=True)
+        import shutil as _sh
+        for src_name, dst_name in [
+            ("te_counts.tsv",        "te_counts_clean.tsv"),
+            ("satellite_counts.tsv", "satellite_counts_clean.tsv"),
+        ]:
+            src = out_dir / src_name
+            if src.exists():
+                _sh.copy(src, integrated / dst_name)
+        return True
+
     # ── M02: Trimming ────────────────────────────────────────────────────────
 
     def _run_m02_trim(self, comparison=None) -> bool:
@@ -1469,7 +1533,7 @@ class ModuleRunner:
         if not all_ok:
             return False
 
-        # Merge all fusions
+        # Merge all fusions — prepend sample_id column to header and data
         merged = out_dir / "fusions_merged.tsv"
         header_written = False
         with open(merged, "w") as fout:
@@ -1481,8 +1545,8 @@ class ModuleRunner:
                     for i, line in enumerate(fin):
                         if i == 0:
                             if not header_written:
-                                # Remove leading # from header
-                                fout.write(line.lstrip("#"))
+                                # Remove leading # and prepend sample_id column
+                                fout.write("sample_id\t" + line.lstrip("#"))
                                 header_written = True
                         else:
                             if line.strip():
