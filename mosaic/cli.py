@@ -122,7 +122,10 @@ def cmd_preflight(config_file: str, auto_download: bool) -> None:
     info(f"Library:    {cfg.library.prep} / {cfg.library.layout}")
     info(f"Comparisons:")
     for c in getattr(cfg, "comparisons", []):
-        info(f"  {c.get('treatment')} vs {c.get('control')}")
+        if c.get("type") == "interaction":
+            info(f"  [{c.get('name','interaction')}] interaction model")
+        else:
+            info(f"  {c.get('treatment')} vs {c.get('control')}")
 
     # Check databases
     from .db_manager import DatabaseManager
@@ -195,6 +198,12 @@ def cmd_run(config_file: str, modules: Optional[str],
         parts = comparison.split("_vs_")
         if len(parts) == 2:
             cfg.comparisons = [{"treatment": parts[0], "control": parts[1]}]
+        else:
+            # Named comparison (e.g. interaction): find by name in config
+            matches = [c for c in (cfg.comparisons or [])
+                       if c.get("name") == comparison]
+            if matches:
+                cfg.comparisons = matches
 
     ok = pipeline.run(mods_list)
     sys.exit(0 if ok else 1)

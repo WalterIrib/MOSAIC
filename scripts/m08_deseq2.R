@@ -46,7 +46,15 @@ option_list <- list(
   make_option("--mode",      type="character", default="simple", help="simple|extended"),
   make_option("--ref",       type="character", default=NULL, help="Reference condition for contrast"),
   make_option("--min-stable-genes", type="integer", default=500,
-              help="Min stable genes for sizeFactors [default: 500]")
+              help="Min stable genes for sizeFactors [default: 500]"),
+  make_option("--fraction-col", type="character", default="fraction",
+              help="Coldata column for fraction factor (interaction mode) [default: fraction]"),
+  make_option("--phase-col",    type="character", default="phase",
+              help="Coldata column for phase factor (interaction mode) [default: phase]"),
+  make_option("--ref-fraction", type="character", default=NULL,
+              help="Reference level for fraction (interaction mode)"),
+  make_option("--ref-phase",    type="character", default=NULL,
+              help="Reference level for phase (interaction mode)")
 )
 
 opt <- parse_args(OptionParser(option_list=option_list))
@@ -115,6 +123,229 @@ if (!is.null(opt$ref)) {
   } else {
     cat(sprintf("[WRN] Reference '%s' not found. Using default.\n", opt$ref))
   }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INTERACTION MODE: ~fraction + phase + fraction:phase
+# Used for ChaRNA vs totRNA background normalization
+# Primary output: fractionChaRNA.phasemitosis coefficient
+#   = extra mitosis effect in ChaRNA above totRNA background
+# ─────────────────────────────────────────────────────────────────────────────
+
+if (opt$mode == "interaction") {
+
+  frac_col  <- opt[["fraction-col"]]
+  phase_col <- opt[["phase-col"]]
+
+  for (col in c(frac_col, phase_col)) {
+    if (!col %in% colnames(coldata))
+      stop(sprintf("Interaction mode requires coldata column '%s'", col))
+  }
+
+  coldata[[frac_col]]  <- factor(coldata[[frac_col]])
+  coldata[[phase_col]] <- factor(coldata[[phase_col]])
+
+  if (!is.null(opt[["ref-fraction"]]) &&
+      opt[["ref-fraction"]] %in% levels(coldata[[frac_col]])) {
+    coldata[[frac_col]] <- relevel(coldata[[frac_col]], ref=opt[["ref-fraction"]])
+    cat(sprintf("[INF] Reference fraction: %s\n", opt[["ref-fraction"]]))
+  }
+  if (!is.null(opt[["ref-phase"]]) &&
+      opt[["ref-phase"]] %in% levels(coldata[[phase_col]])) {
+    coldata[[phase_col]] <- relevel(coldata[[phase_col]], ref=opt[["ref-phase"]])
+    cat(sprintf("[INF] Reference phase: %s\n", opt[["ref-phase"]]))
+  }
+
+  cat(sprintf("[INF] Fraction levels: %s\n",
+              paste(levels(coldata[[frac_col]]), collapse=", ")))
+  cat(sprintf("[INF] Phase levels: %s\n",
+              paste(levels(coldata[[phase_col]]), collapse=", ")))
+
+  design_formula <- as.formula(
+    sprintf("~ %s + %s + %s:%s", frac_col, phase_col, frac_col, phase_col)
+  )
+  cat(sprintf("[INF] Interaction design: %s\n", deparse(design_formula)))
+
+  # Stable sizeFactors using interaction design
+  cat("\n[INF] Computing sizeFactors from stable genes (interaction design)...\n")
+  dds_init_int <- DESeqDataSetFromMatrix(
+    countData = counts_mat,
+    colData   = coldata,
+    design    = design_formula
+  )
+  dds_init_int <- estimateSizeFactors(dds_init_int)
+  dds_init_int <- estimateDispersions(dds_init_int, quiet=TRUE)
+  norm_init    <- counts(dds_init_int, normalized=TRUE)
+  base_mean_i  <- rowMeans(norm_init)
+  cv_i         <- apply(norm_init, 1, sd) / (base_mean_i + 1e-10)
+  stable_mask_i <- base_mean_i > 10 & cv_i < 0.3 & !is.na(cv_i)
+  n_stable_i    <- sum(stable_mask_i)
+  cat(sprintf("[INF] Stable genes (interaction): %d\n", n_stable_i))
+  if (n_stable_i < opt[["min-stable-genes"]]) {
+    cat("[WRN] Falling back to baseMean>10.\n")
+    stable_mask_i <- base_mean_i > 10 & !is.na(base_mean_i)
+    n_stable_i    <- sum(stable_mask_i)
+  }
+  sf_int <- estimateSizeFactorsForMatrix(counts_mat[stable_mask_i, , drop=FALSE])
+  cat(sprintf("[INF] SizeFactors: %s\n", paste(sprintf("%.3f", sf_int), collapse=", ")))
+
+  write.table(
+    data.frame(gene_id=rownames(counts_mat)[stable_mask_i]),
+    file.path(opt$outdir, "stable_genes.tsv"),
+    sep="\t", row.names=FALSE, quote=FALSE
+  )
+
+  # Build and run main DESeq2
+  dds_int <- DESeqDataSetFromMatrix(
+    countData = counts_mat,
+    colData   = coldata,
+    design    = design_formula
+  )
+  sizeFactors(dds_int) <- sf_int
+  dds_int <- DESeq(dds_int, fitType="parametric", quiet=FALSE)
+
+  coef_names <- resultsNames(dds_int)
+  cat(sprintf("[INF] Coefficients: %s\n", paste(coef_names, collapse=", ")))
+
+  # Save normalized counts
+  norm_counts_int <- counts(dds_int, normalized=TRUE)
+  write.table(
+    data.frame(gene_id=rownames(norm_counts_int), norm_counts_int, check.names=FALSE),
+    file.path(opt$outdir, "normalized_counts.tsv"),
+    sep="\t", row.names=FALSE, quote=FALSE
+  )
+  cat("[INF] Normalized counts saved.\n")
+
+  # Helper: extract results for a coefficient
+  extract_coef_results <- function(dds, coef, label, lfc_thr, padj_thr) {
+    cat(sprintf("\n[INF] Extracting coefficient: %s\n", coef))
+    res <- results(dds, name=coef, lfcThreshold=lfc_thr,
+                   alpha=padj_thr, independentFiltering=TRUE)
+    res_shrunk <- lfcShrink(dds, coef=coef, type="apeglm", quiet=TRUE)
+    res_df <- as.data.frame(res)
+    res_df$log2FoldChange_shrunk <- as.data.frame(res_shrunk)$log2FoldChange
+    res_df$lfcSE_shrunk          <- as.data.frame(res_shrunk)$lfcSE
+    res_df$gene_id               <- rownames(res_df)
+    res_df <- res_df[order(res_df$padj, na.last=TRUE), ]
+    n_up   <- sum(!is.na(res_df$padj) & res_df$padj < padj_thr &
+                  res_df$log2FoldChange > lfc_thr)
+    n_down <- sum(!is.na(res_df$padj) & res_df$padj < padj_thr &
+                  res_df$log2FoldChange < -lfc_thr)
+    cat(sprintf("[INF] %s: UP=%d, DOWN=%d\n", label, n_up, n_down))
+    return(res_df)
+  }
+
+  # Find interaction coefficient (fractionChaRNA.phasemitosis or similar)
+  interact_coef <- grep("\\.", coef_names, value=TRUE)
+  if (length(interact_coef) == 0)
+    stop("Could not find interaction coefficient in: ", paste(coef_names, collapse=", "))
+  interact_coef <- interact_coef[1]
+
+  # Find phase coefficient (mitosis effect in reference fraction = totRNA)
+  phase_coef <- grep(sprintf("%s_", phase_col), coef_names, value=TRUE)
+  if (length(phase_coef) == 0)
+    stop("Could not find phase coefficient")
+  phase_coef <- phase_coef[1]
+
+  # Extract interaction result (primary: ChaRNA-specific mitosis effect)
+  res_interact <- extract_coef_results(
+    dds_int, interact_coef,
+    label=sprintf("interaction_(%s)", interact_coef),
+    lfc_thr=opt$lfc, padj_thr=opt$padj
+  )
+  out_interact <- file.path(opt$outdir,
+                            sprintf("genes_%s_DE.tsv", gsub("\\.", "_", interact_coef)))
+  write.table(res_interact, out_interact, sep="\t", quote=FALSE, row.names=FALSE)
+  cat(sprintf("[INF] Written: %s\n", basename(out_interact)))
+
+  sig_interact <- res_interact[!is.na(res_interact$padj) &
+                               res_interact$padj < opt$padj &
+                               abs(res_interact$log2FoldChange) > opt$lfc, ]
+  write.table(sig_interact,
+    file.path(opt$outdir, sprintf("genes_%s_DE_significant.tsv",
+                                  gsub("\\.", "_", interact_coef))),
+    sep="\t", quote=FALSE, row.names=FALSE)
+
+  # Extract phase result (totRNA mitosis effect = background)
+  res_phase <- extract_coef_results(
+    dds_int, phase_coef,
+    label=sprintf("phase_(%s)", phase_coef),
+    lfc_thr=opt$lfc, padj_thr=opt$padj
+  )
+  out_phase <- file.path(opt$outdir,
+                         sprintf("genes_%s_DE.tsv", gsub("_", "", phase_coef)))
+  write.table(res_phase, out_phase, sep="\t", quote=FALSE, row.names=FALSE)
+  cat(sprintf("[INF] Written: %s\n", basename(out_phase)))
+
+  # TE and satellite DE (interaction mode)
+  for (tsv_path in c(opt[["te-counts"]], opt[["sat-counts"]])) {
+    if (is.null(tsv_path) || !file.exists(tsv_path)) next
+    name_prefix <- ifelse(grepl("satellite", tsv_path), "satellite", "TE")
+    cat(sprintf("\n[INF] Running TE DE (interaction) for %s...\n", name_prefix))
+
+    te_raw <- read.table(tsv_path, header=TRUE, sep="\t",
+                         row.names=1, check.names=FALSE)
+    te_mat <- as.matrix(te_raw)
+    mode(te_mat) <- "integer"
+    common_te <- intersect(colnames(te_mat), rownames(coldata))
+    te_mat    <- te_mat[, common_te, drop=FALSE]
+    keep      <- rowSums(te_mat >= 1) >= ncol(te_mat) / 2
+    te_mat    <- te_mat[keep, , drop=FALSE]
+    if (nrow(te_mat) == 0) next
+
+    dds_te_int <- DESeqDataSetFromMatrix(
+      countData = te_mat,
+      colData   = coldata[common_te, , drop=FALSE],
+      design    = design_formula
+    )
+    sizeFactors(dds_te_int) <- sf_int[common_te]
+    dds_te_int <- DESeq(dds_te_int, fitType="local", quiet=TRUE)
+
+    for (coef in c(interact_coef, phase_coef)) {
+      te_res <- results(dds_te_int, name=coef, lfcThreshold=opt$lfc,
+                        alpha=opt$padj, independentFiltering=FALSE)
+      te_shrunk <- lfcShrink(dds_te_int, coef=coef, type="apeglm", quiet=TRUE)
+      te_df <- as.data.frame(te_res)
+      te_df$log2FoldChange_shrunk <- as.data.frame(te_shrunk)$log2FoldChange
+      te_df$family_id <- rownames(te_df)
+      tag <- gsub("\\.", "_", coef)
+      out_te <- file.path(opt$outdir, sprintf("%s_%s_DE.tsv", name_prefix, tag))
+      write.table(te_df, out_te, sep="\t", quote=FALSE, row.names=FALSE)
+      cat(sprintf("[INF] Written: %s\n", basename(out_te)))
+    }
+  }
+
+  # PCA of all samples
+  suppressPackageStartupMessages(library(DESeq2))
+  vsd_int <- tryCatch(vst(dds_int, blind=FALSE), error=function(e) {
+    cat("[WRN] VST failed, using rlog\n"); rlog(dds_int, blind=FALSE)
+  })
+  pca_int <- prcomp(t(assay(vsd_int)), scale.=FALSE)
+  pca_df  <- data.frame(
+    sample_id  = rownames(pca_int$x),
+    PC1        = pca_int$x[, 1],
+    PC2        = pca_int$x[, 2],
+    fraction   = coldata[rownames(pca_int$x), frac_col],
+    phase      = coldata[rownames(pca_int$x), phase_col]
+  )
+  var_exp <- round(100 * pca_int$sdev^2 / sum(pca_int$sdev^2), 1)
+  colnames(pca_df)[3:4] <- c(sprintf("PC1_var%.1f", var_exp[1]),
+                              sprintf("PC2_var%.1f", var_exp[2]))
+  colnames(pca_df)[3] <- "PC1"
+  colnames(pca_df)[4] <- "PC2"
+  pca_df$PC1_var <- var_exp[1]
+  pca_df$PC2_var <- var_exp[2]
+  write.table(pca_df, file.path(opt$outdir, "pca_coordinates.tsv"),
+              sep="\t", row.names=FALSE, quote=FALSE)
+  cat("[INF] PCA coordinates saved.\n")
+
+  sink(file.path(opt$outdir, "session_info.txt"))
+  sessionInfo()
+  sink()
+
+  cat("\n[OK] M08 DESeq2 interaction mode complete.\n")
+  cat(sprintf("[OK] Results in: %s\n\n", opt$outdir))
+  quit(save="no", status=0)
 }
 
 

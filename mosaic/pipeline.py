@@ -563,6 +563,12 @@ class ModuleRunner:
                 return True
 
             ok = method(comparison=comparison)
+            # Interaction comparisons: modules that can't run (no treatment/control)
+            # return False but should be treated as skip, not failure
+            if not ok and self._is_interaction_comparison(comparison):
+                warn(f"[SKIP] {module} not applicable to interaction comparison")
+                self.state.mark(module, "skipped", comparison)
+                return True
             status = "done" if ok else "failed"
             self.state.mark(module, status, comparison,
                             error=None if ok else f"{module} returned error")
@@ -842,22 +848,26 @@ class ModuleRunner:
 
     def _run_m08_deseq2(self, comparison: str = None) -> bool:
         cfg = self.cfg
-        comp = self._parse_comparison(comparison)
-        if not comp:
-            return False
+        comp_cfg = self._get_comparison_config(comparison)
+        is_interaction = comp_cfg and comp_cfg.get("type") == "interaction"
 
-        treatment, control = comp
+        # For non-interaction: require treatment/control
+        if not is_interaction:
+            comp = self._parse_comparison(comparison)
+            if not comp:
+                return False
+            treatment, control = comp
+
         out_de = self._comparison_dir(comparison) / "deseq2"
         out_de.mkdir(parents=True, exist_ok=True)
 
-        # Write coldata for this comparison
         coldata_path = self._write_coldata(comparison)
 
         # Strandedness → featureCounts -s
         strand = self._get_consensus_strandedness()
         s_flag = strandedness_to_featurecounts(strand, cfg.library.layout)
 
-        # featureCounts
+        # featureCounts (all samples for both simple and interaction)
         bam_files = self._get_bam_files()
         counts_out = out_de / "all_genes_counts.tsv"
 
@@ -877,17 +887,28 @@ class ModuleRunner:
         if ret != 0:
             return False
 
-        # Post-process featureCounts output:
-        # 1. Remove comment line (starts with #)
-        # 2. Rename BAM path columns to sample_ids
-        # 3. Keep only Geneid + count columns (drop Chr/Start/End/Strand/Length)
         self._clean_featurecounts(counts_out)
 
-        # DESeq2
         thresholds = cfg.thresholds
-        ret = run_r_script(
-            self.scripts / "m08_deseq2.R",
-            [
+
+        if is_interaction:
+            deseq2_args = [
+                "--counts",        str(counts_out),
+                "--te-counts",     str(self.out / "integrated" / "te_counts_clean.tsv"),
+                "--sat-counts",    str(self.out / "integrated" / "satellite_counts_clean.tsv"),
+                "--coldata",       str(coldata_path),
+                "--outdir",        str(out_de),
+                "--lfc",           str(thresholds.lfc),
+                "--padj",          str(thresholds.padj),
+                "--shrink",        "ashr",
+                "--mode",          "interaction",
+                "--fraction-col",  "fraction",
+                "--phase-col",     "phase",
+                "--ref-fraction",  comp_cfg.get("ref_fraction", "totRNA"),
+                "--ref-phase",     comp_cfg.get("ref_phase", "interphase"),
+            ]
+        else:
+            deseq2_args = [
                 "--counts",     str(counts_out),
                 "--te-counts",  str(self.out / "integrated" / "te_counts_clean.tsv"),
                 "--sat-counts", str(self.out / "integrated" / "satellite_counts_clean.tsv"),
@@ -898,7 +919,11 @@ class ModuleRunner:
                 "--shrink",     "ashr",
                 "--mode",       "simple",
                 "--ref",        control,
-            ],
+            ]
+
+        ret = run_r_script(
+            self.scripts / "m08_deseq2.R",
+            deseq2_args,
             log_file=self._log("m08_deseq2", comparison)
         )
         return ret == 0
@@ -1600,14 +1625,33 @@ class ModuleRunner:
 
     def _parse_comparison(self, comparison: Optional[str]) -> Optional[Tuple[str, str]]:
         if not comparison:
-            # Use first comparison from config
-            if self.cfg.comparisons:
-                c = self.cfg.comparisons[0]
-                return c["treatment"], c["control"]
+            # Use first non-interaction comparison from config
+            for c in (self.cfg.comparisons or []):
+                if c.get("type") != "interaction":
+                    return c["treatment"], c["control"]
             return None
+        # Check if this is a named interaction comparison
+        for c in (self.cfg.comparisons or []):
+            if c.get("type") == "interaction" and c.get("name") == comparison:
+                return None  # Not a simple 2-group comparison
         parts = comparison.split("_vs_")
         if len(parts) == 2:
             return parts[0], parts[1]
+        return None
+
+    def _is_interaction_comparison(self, comparison: Optional[str]) -> bool:
+        """Return True if the given comparison is an interaction-type comparison."""
+        c = self._get_comparison_config(comparison)
+        return bool(c and c.get("type") == "interaction")
+
+    def _get_comparison_config(self, comparison: Optional[str]) -> Optional[dict]:
+        """Return the full comparison config dict for a given comparison name."""
+        if not comparison:
+            return (self.cfg.comparisons or [None])[0]
+        for c in (self.cfg.comparisons or []):
+            name = c.get("name", f"{c.get('treatment','')}_vs_{c.get('control','')}")
+            if name == comparison:
+                return c
         return None
 
     def _get_bam_files(self) -> List[str]:
@@ -1643,14 +1687,28 @@ class ModuleRunner:
 
     def _write_coldata(self, comparison: str) -> Path:
         """Write coldata TSV for a specific comparison."""
+        comp_cfg = self._get_comparison_config(comparison)
+        coldata_rows = self.cfg.samples.coldata_df  # list of dicts
+
+        # Interaction comparison: include all samples (no subsetting)
+        if comp_cfg and comp_cfg.get("type") == "interaction":
+            if not coldata_rows:
+                return Path(self.cfg.samples.coldata)
+            out_path = self.out / f"coldata_{comparison}.tsv"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            keys = list(coldata_rows[0].keys())
+            with open(out_path, "w") as fh:
+                fh.write("\t".join(keys) + "\n")
+                for row in coldata_rows:
+                    fh.write("\t".join(str(row.get(k, "")) for k in keys) + "\n")
+            return out_path
+
         comp = self._parse_comparison(comparison)
         if not comp:
             return Path(self.cfg.samples.coldata)
 
         treatment, control = comp
-        coldata_rows = self.cfg.samples.coldata_df  # list of dicts
         if not coldata_rows:
-            # Fallback to original coldata file
             return Path(self.cfg.samples.coldata)
 
         subset = [r for r in coldata_rows
@@ -1744,10 +1802,12 @@ class Pipeline:
         order = self._resolve_order(enabled)
 
         # Get comparisons
-        comparisons = [
-            f"{c['treatment']}_vs_{c['control']}"
-            for c in getattr(self.cfg, "comparisons", [])
-        ]
+        comparisons = []
+        for c in getattr(self.cfg, "comparisons", []):
+            if c.get("type") == "interaction":
+                comparisons.append(c.get("name", "interaction"))
+            else:
+                comparisons.append(f"{c['treatment']}_vs_{c['control']}")
         if not comparisons:
             comparisons = [None]  # single comparison from config
 
