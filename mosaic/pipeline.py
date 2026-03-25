@@ -835,6 +835,17 @@ class ModuleRunner:
                 warn(f"STAR failed for {sid}")
                 all_ok = False
 
+        # Build gene_type_map.tsv from GTF (needed by downstream modules)
+        gene_map = self.out / "integrated" / "gene_type_map.tsv"
+        if not gene_map.exists():
+            try:
+                from .refs import extract_gene_type_map
+                (self.out / "integrated").mkdir(parents=True, exist_ok=True)
+                extract_gene_type_map(Path(cfg.databases.gtf), gene_map)
+                info(f"gene_type_map.tsv written: {gene_map}")
+            except Exception as e:
+                warn(f"Could not build gene_type_map.tsv: {e}")
+
         return all_ok
 
     # ── M07: Strandedness detection ──────────────────────────────────────────
