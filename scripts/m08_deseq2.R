@@ -221,7 +221,7 @@ if (opt$mode == "interaction") {
     cat(sprintf("\n[INF] Extracting coefficient: %s\n", coef))
     res <- results(dds, name=coef, lfcThreshold=lfc_thr,
                    alpha=padj_thr, independentFiltering=TRUE)
-    res_shrunk <- lfcShrink(dds, coef=coef, type="apeglm", quiet=TRUE)
+    res_shrunk <- lfcShrink(dds, coef=coef, type="ashr", quiet=TRUE)
     res_df <- as.data.frame(res)
     res_df$log2FoldChange_shrunk <- as.data.frame(res_shrunk)$log2FoldChange
     res_df$lfcSE_shrunk          <- as.data.frame(res_shrunk)$lfcSE
@@ -304,7 +304,7 @@ if (opt$mode == "interaction") {
     for (coef in c(interact_coef, phase_coef)) {
       te_res <- results(dds_te_int, name=coef, lfcThreshold=opt$lfc,
                         alpha=opt$padj, independentFiltering=FALSE)
-      te_shrunk <- lfcShrink(dds_te_int, coef=coef, type="apeglm", quiet=TRUE)
+      te_shrunk <- lfcShrink(dds_te_int, coef=coef, type="ashr", quiet=TRUE)
       te_df <- as.data.frame(te_res)
       te_df$log2FoldChange_shrunk <- as.data.frame(te_shrunk)$log2FoldChange
       te_df$family_id <- rownames(te_df)

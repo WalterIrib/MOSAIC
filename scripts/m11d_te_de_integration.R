@@ -229,7 +229,7 @@ if (!is.null(te_body_genes))
 
 de_integrated <- de_integrated |>
   mutate(
-    has_prom_te  = !is.na(n_te_prom_loci),
+    has_prom_te  = if ("n_te_prom_loci" %in% colnames(de_integrated)) !is.na(n_te_prom_loci) else FALSE,
     has_body_te  = if ("n_te_body_loci" %in% colnames(de_integrated)) !is.na(n_te_body_loci) else FALSE,
     te_category  = case_when(
       has_prom_te & has_body_te ~ "Promoter + Body TE",

@@ -332,6 +332,10 @@ def detect_strandedness_full(bam: Path, bed12: Path) -> dict:
         elif "failed to determine" in line:
             frac_fail = val
 
+    # frac_rf = "1++,1--,2+-,2-+" = R1 on same strand as gene = standard FR-forward
+    # frac_fr = "1+-,1-+,2++,2--" = R2 on same strand as gene = standard RF-dUTP
+    # featureCounts: -s 1 = R1 same as feature (fr-secondstrand)
+    #                -s 2 = R2 same as feature (fr-firststrand / dUTP / TruSeq Stranded)
     if frac_rf > 0.7:
         strand = "RF"
     elif frac_fr > 0.7:
@@ -344,7 +348,7 @@ def detect_strandedness_full(bam: Path, bed12: Path) -> dict:
         "frac_fr":    frac_fr,
         "frac_failed": frac_fail,
         "strandedness": strand,
-        "strand_fc":  {"unstranded": "0", "RF": "2", "FR": "1"}[strand],
+        "strand_fc":  {"unstranded": "0", "RF": "1", "FR": "2"}[strand],
     }
 
 
@@ -481,13 +485,16 @@ def _gtf_to_bed12(gtf_path: Path, bed12_path: Path) -> None:
 
 
 def strandedness_to_featurecounts(strand: str, layout: str) -> str:
-    """Convert strandedness to featureCounts -s parameter."""
+    """Convert strandedness to featureCounts -s parameter.
+    RF = "1++,1--,2+-,2-+" = R1 same as gene = fr-secondstrand = -s 1
+    FR = "1+-,1-+,2++,2--" = R2 same as gene = fr-firststrand/dUTP/TruSeq = -s 2
+    """
     if strand == "unstranded":
         return "0"
     elif strand == "RF":
-        return "2"  # reverse stranded
-    else:
-        return "1"  # forward stranded
+        return "1"  # R1 on sense strand (fr-secondstrand)
+    else:  # FR
+        return "2"  # R2 on sense strand (fr-firststrand / dUTP)
 
 
 def strandedness_to_star(strand: str) -> List[str]:
@@ -880,7 +887,7 @@ class ModuleRunner:
                 st = {
                     "frac_rf": 0.0, "frac_fr": 0.0, "frac_failed": 0.0,
                     "strandedness": cfg_strand,
-                    "strand_fc": {"unstranded": "0", "RF": "2", "FR": "1"}.get(cfg_strand, "0"),
+                    "strand_fc": {"unstranded": "0", "RF": "1", "FR": "2"}.get(cfg_strand, "0"),
                 }
                 info(f"  {sid}: {cfg_strand} (from config, no auto-detect)")
 
