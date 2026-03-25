@@ -725,7 +725,49 @@ class ModuleRunner:
                 warn(f"Trimming failed for {sid}")
                 all_ok = False
 
+        # Write trim_stats.tsv from fastp JSON outputs
+        self._write_trim_stats(out_trim, cfg)
         return all_ok
+
+    def _write_trim_stats(self, trim_dir: Path, cfg) -> None:
+        """Parse fastp JSON files and write trim_stats.tsv."""
+        import json as _json
+        cond_map = {r["sample_id"]: r.get("condition", "")
+                    for r in (cfg.samples.coldata_df or [])}
+        rows = []
+        cols = ["sample_id", "condition", "reads_before", "reads_after",
+                "pass_rate", "mean_len_r1", "q30_rate", "duplication",
+                "r1_trimmed", "r2_trimmed"]
+        for sid in cfg.samples.sample_ids:
+            jf = trim_dir / sid / f"{sid}.fastp.json"
+            if not jf.exists():
+                continue
+            try:
+                d = _json.loads(jf.read_text())
+                s = d["summary"]
+                rb = s["before_filtering"]["total_reads"]
+                ra = s["after_filtering"]["total_reads"]
+                rows.append({
+                    "sample_id":    sid,
+                    "condition":    cond_map.get(sid, ""),
+                    "reads_before": rb,
+                    "reads_after":  ra,
+                    "pass_rate":    round(ra / rb * 100, 3) if rb else 0,
+                    "mean_len_r1":  s["after_filtering"]["read1_mean_length"],
+                    "q30_rate":     round(s["after_filtering"]["q30_rate"] * 100, 4),
+                    "duplication":  round(d["duplication"]["rate"] * 100, 4),
+                    "r1_trimmed":   str(trim_dir / sid / f"{sid}_R1_trimmed.fastq.gz"),
+                    "r2_trimmed":   str(trim_dir / sid / f"{sid}_R2_trimmed.fastq.gz"),
+                })
+            except Exception as e:
+                warn(f"Could not parse fastp JSON for {sid}: {e}")
+        if rows:
+            out = trim_dir / "trim_stats.tsv"
+            with open(out, "w") as fh:
+                fh.write("\t".join(cols) + "\n")
+                for r in rows:
+                    fh.write("\t".join(str(r.get(c, "")) for c in cols) + "\n")
+            info(f"trim_stats.tsv written: {len(rows)} samples")
 
     # ── M04: STAR alignment ──────────────────────────────────────────────────
 
