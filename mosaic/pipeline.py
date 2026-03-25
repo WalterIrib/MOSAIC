@@ -1207,16 +1207,13 @@ class ModuleRunner:
         out_dir = self.out / "m11b"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        import os as _os
-        env_vars = _os.environ.copy()
-        env_vars["PYTHONPATH"] = str(self.scripts.parent)
         return run_cmd([
-            sys.executable, str(self.scripts.parent / "mosaic" / "m11b_promoter_te.py"),
+            sys.executable, "-m", "mosaic.m11b_promoter_te",
             "--rmsk-bed",  str(Path(cfg.databases.rmsk_bed)),
             "--gtf",       str(Path(cfg.databases.gtf)),
             "--outdir",    str(out_dir),
-        ], log_file=self._log("m11b_promoter_te"),
-            extra_env={"PYTHONPATH": str(self.scripts.parent)}) == 0
+        ], cwd=self.scripts.parent,
+           log_file=self._log("m11b_promoter_te")) == 0
 
     # ── M11c: TE age ─────────────────────────────────────────────────────────
 
@@ -1433,8 +1430,8 @@ class ModuleRunner:
 
         # m19 takes comma-separated BAM lists
         ret = run_cmd([
-            sys.executable, str(self.scripts.parent / "mosaic" / "m19_rna_editing.py"),
-            "--bam-normal", ",".join(normal_bams),
+            sys.executable, "-m", "mosaic.m19_rna_editing",
+            "--bam-normal",  ",".join(normal_bams),
             "--bam-tumor",  ",".join(tumor_bams),
             "--ref",        str(Path(cfg.databases.genome_fa)),
             "--gtf",        str(Path(cfg.databases.gtf)),
@@ -1443,7 +1440,7 @@ class ModuleRunner:
             "--min-cov",    str(cfg.thresholds.min_cov_editing),
             "--min-score",  str(cfg.thresholds.min_score_editing),
             "--min-ef",     str(cfg.thresholds.min_ef_editing),
-        ], log_file=self._log("m19_editing"))
+        ], cwd=self.scripts.parent, log_file=self._log("m19_editing"))
         if ret != 0:
             return False
 
@@ -1573,7 +1570,7 @@ class ModuleRunner:
             for sid in cfg.samples.get_condition_samples(treatment))
 
         return run_cmd([
-            sys.executable, str(self.scripts.parent / "mosaic" / "m23_te_insertions.py"),
+            sys.executable, "-m", "mosaic.m23_te_insertions",
             "--chimeric-normal",  normal_chim,
             "--chimeric-tumor",   tumor_chim,
             "--te-consensus",     str(Path(cfg.databases.te_consensus)),
@@ -1584,7 +1581,7 @@ class ModuleRunner:
             "--min-clip",         str(cfg.thresholds.min_clip_te),
             "--min-support",      str(cfg.thresholds.min_support_te),
             "--min-mapq",         "0",
-        ], log_file=self._log("m23_te_insertions")) == 0
+        ], cwd=self.scripts.parent, log_file=self._log("m23_te_insertions")) == 0
 
     # ── M15: Fusion genes (Arriba) ───────────────────────────────────────────
 
@@ -1881,11 +1878,14 @@ class Pipeline:
             "m00_download", "m02_trim", "m04_star",
             "m05_te_count", "m07_strandedness",
             "m09_satellite", "m11_te_host",
-            "m11b_promoter_te", "m11c_te_age",
-            "m19_editing", "m20_meta", "m20b_humann",
-            "m23_te_insertions", "m12_tetranscripts",
+            "m11b_promoter_te",
+            "m20_meta", "m20b_humann",
+            "m12_tetranscripts",
             "m15_fusion", "m16_stringtie",
         }
+        # These run per-comparison (need comparison-specific DE data)
+        # m11c_te_age, m11d_te_de, m17_rmats, m18_network,
+        # m19_editing, m23_te_insertions → handled in else branch
 
         section("MOSAIC Pipeline")
         info(f"Modules: {', '.join(order)}")
