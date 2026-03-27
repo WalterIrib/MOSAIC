@@ -303,14 +303,17 @@ if (!is.null(norm_counts) && ncol(norm_counts) >= 2) {
 
   ann_df <- data.frame(Condition=conditions[colnames(cor_mat)],
                        row.names=colnames(cor_mat))
-  ann_colors <- list(Condition=col_cond[unique(ann_df$Condition)])
-  ann_colors$Condition <- ann_colors$Condition[!is.na(ann_colors$Condition)]
+  known_conds <- unique(ann_df$Condition[!is.na(ann_df$Condition) &
+                                          ann_df$Condition %in% names(col_cond)])
+  use_ann <- length(known_conds) > 0
+  ann_colors <- if (use_ann) list(Condition=col_cond[known_conds]) else list()
 
   pheatmap::pheatmap(
     cor_mat,
     color=colorRampPalette(c("#2C3E50","#85C1E9","white"))(100),
-    annotation_col=ann_df, annotation_row=ann_df,
-    annotation_colors=ann_colors,
+    annotation_col=if (use_ann) ann_df else NA,
+    annotation_row=if (use_ann) ann_df else NA,
+    annotation_colors=if (use_ann) ann_colors else list(),
     display_numbers=TRUE, number_format="%.3f", fontsize_number=9,
     main="Sample-sample Pearson correlation"
   )
@@ -1364,9 +1367,9 @@ if (!is.null(de_te_integrated) && nrow(de_te_integrated) > 0) {
       Gene=gene_name, `Gene ID`=gene_id,
       log2FC, `padj`=padj_fmt, Direction=direction,
       `TE context`=te_category,
-      `Prom TE loci`=n_te_prom_loci,
-      `Prom TE families`=n_te_prom_families,
-      `Prom macros`=te_prom_macros
+      any_of(c(`Prom TE loci`="n_te_prom_loci",
+               `Prom TE families`="n_te_prom_families",
+               `Prom macros`="te_prom_macros"))
     ) |>
     DT::datatable(
       caption="All DE genes with TE annotation (promoter and gene body). Download for complete list.",
