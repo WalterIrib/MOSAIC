@@ -1,0 +1,357 @@
+---
+title: "MOSAIC — ChaRNA Interaction Report"
+subtitle: "Chromatin-associated RNA: mitosis-specific changes (interaction model)"
+date: today
+format:
+  html:
+    theme: flatly
+    toc: true
+    toc-depth: 3
+    toc-float: true
+    code-fold: true
+    self-contained: true
+    fig-width: 9
+    fig-height: 5
+params:
+  out_dir:   "/home/walter/Desktop/METACAR/mosaic_output"
+  padj_threshold: 0.05
+  lfc_threshold:  1.0
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE,
+                      fig.align="center")
+
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(knitr)
+library(kableExtra)
+library(pheatmap)
+library(DT)
+
+p        <- params
+out      <- p$out_dir
+padj_thr <- p$padj_threshold
+lfc_thr  <- p$lfc_threshold
+de_dir   <- file.path(out, "comparison_ChaRNA_interaction", "deseq2")
+
+safe_read <- function(f, ...) {
+  if (file.exists(f)) tryCatch(read.delim(f, ...), error=function(e) NULL)
+  else NULL
+}
+
+# ── Load data ──────────────────────────────────────────────────────────────────
+int_sig   <- safe_read(file.path(de_dir, "genes_fractionChaRNA_phasemitosis_DE_significant.tsv"))
+int_full  <- safe_read(file.path(de_dir, "genes_fractionChaRNA_phasemitosis_DE.tsv"))
+phase_all <- safe_read(file.path(de_dir, "genes_phasemitosisvsinterphase_DE.tsv"))
+te_int    <- safe_read(file.path(de_dir, "TE_fractionChaRNA_phasemitosis_DE.tsv"))
+te_phase  <- safe_read(file.path(de_dir, "TE_phase_mitosis_vs_interphase_DE.tsv"))
+sat_int   <- safe_read(file.path(de_dir, "satellite_fractionChaRNA_phasemitosis_DE.tsv"))
+norm_counts <- safe_read(file.path(de_dir, "normalized_counts.tsv"), row.names=1)
+
+# PCA — fix duplicate "PC1" column name
+pca_raw <- safe_read(file.path(de_dir, "pca_coordinates.tsv"))
+if (!is.null(pca_raw)) {
+  cn <- colnames(pca_raw)
+  dup <- which(duplicated(cn))
+  cn[dup] <- paste0(cn[dup], "_2")
+  colnames(pca_raw) <- cn
+  # rename to expected names: sample_id, PC1, PC2, fraction, phase
+  pca_coords <- pca_raw |>
+    rename(any_of(c(PC2="PC1_2", fraction="PC1_2"))) |>
+    select(sample_id, PC1, PC2=any_of(c("PC1_2","PC2")),
+           fraction=any_of(c("fraction","PC1_2")),
+           phase=any_of(c("phase"))) |>
+    distinct()
+  # fallback: col 1=sample_id, 2=PC1, 3=PC2, 4=fraction, 5=phase
+  if (ncol(pca_raw) >= 5) {
+    pca_coords <- data.frame(
+      sample_id = pca_raw[[1]],
+      PC1       = as.numeric(pca_raw[[2]]),
+      PC2       = as.numeric(pca_raw[[3]]),
+      fraction  = pca_raw[[4]],
+      phase     = pca_raw[[5]],
+      PC1_var   = if (ncol(pca_raw)>=6) pca_raw[[6]] else NA,
+      PC2_var   = if (ncol(pca_raw)>=7) pca_raw[[7]] else NA
+    )
+  }
+}
+
+# Colours
+col_frac  <- c(ChaRNA="#1A5276", totRNA="#7FB3D3")
+col_phase <- c(interphase="#27AE60", mitosis="#E74C3C")
+col_up    <- "#E74C3C"; col_dn <- "#3498DB"; col_ns <- "#BDC3C7"
+```
+
+# Biological Context
+
+This report presents results from a **DESeq2 interaction model** (`~ fraction + phase + fraction:phase`) applied to 12 RNA-seq samples covering two fractions and two cell-cycle phases:
+
+| Group | Fraction | Phase | n |
+|-------|----------|-------|---|
+| ChaRNA | Chromatin-associated RNA | Interphase | 3 |
+| mito-ChaRNA | Chromatin-associated RNA | Mitosis | 3 |
+| totRNA | Total RNA | Interphase | 3 |
+| mito-totRNA | Total RNA | Mitosis | 3 |
+
+**Coefficient of interest — `fraction[ChaRNA]:phase[mitosis]`**: tests whether the effect of mitosis on transcript levels differs between the ChaRNA and totRNA fractions.
+A **significant positive** interaction (LFC > 0) means a gene is *more enriched* in chromatin-associated RNA during mitosis than expected from its overall transcriptional change.
+A **significant negative** interaction (LFC < 0) means a gene is *depleted* from chromatin during mitosis beyond the global decrease.
+
+Reference: `totRNA` fraction, `interphase` phase.
+
+---
+
+# QC
+
+## PCA
+
+```{r pca-plot, fig.height=5, fig.width=8}
+if (!is.null(pca_coords)) {
+  pc1v <- if (!is.na(pca_coords$PC1_var[1])) paste0("PC1 (", pca_coords$PC1_var[1], "%)") else "PC1"
+  pc2v <- if (!is.na(pca_coords$PC2_var[1])) paste0("PC2 (", pca_coords$PC2_var[1], "%)") else "PC2"
+
+  ggplot(pca_coords, aes(x=PC1, y=PC2, color=fraction, shape=phase, label=sample_id)) +
+    geom_point(size=5, alpha=0.9) +
+    ggrepel::geom_text_repel(size=3.2, show.legend=FALSE) +
+    scale_color_manual(values=col_frac) +
+    scale_shape_manual(values=c(interphase=16, mitosis=17)) +
+    labs(title="PCA — all 12 samples (top 500 most variable genes)",
+         x=pc1v, y=pc2v, color="Fraction", shape="Phase") +
+    theme_minimal(base_size=13) +
+    theme(legend.position="right")
+} else cat("PCA data not available.\n")
+```
+
+## Sample Correlation
+
+```{r corr-heatmap, fig.height=6, fig.width=7}
+if (!is.null(norm_counts) && ncol(norm_counts) >= 2) {
+  nc_log  <- log2(as.matrix(norm_counts) + 1)
+  cor_mat <- cor(nc_log, method="pearson")
+
+  # Build annotation from pca_coords
+  if (!is.null(pca_coords)) {
+    ann_df <- data.frame(
+      Fraction = pca_coords$fraction[match(colnames(cor_mat), pca_coords$sample_id)],
+      Phase    = pca_coords$phase[match(colnames(cor_mat), pca_coords$sample_id)],
+      row.names = colnames(cor_mat)
+    )
+    ann_colors <- list(Fraction=col_frac, Phase=col_phase)
+  } else {
+    ann_df <- NA; ann_colors <- list()
+  }
+
+  pheatmap::pheatmap(
+    cor_mat,
+    color=colorRampPalette(c("#2C3E50","#85C1E9","white"))(100),
+    annotation_col = ann_df,
+    annotation_row = ann_df,
+    annotation_colors = ann_colors,
+    display_numbers=TRUE, number_format="%.3f", fontsize_number=8,
+    main="Sample-sample Pearson correlation (log2 normalised counts)"
+  )
+} else cat("Normalised counts not available.\n")
+```
+
+---
+
+# Interaction Results: ChaRNA-specific Changes During Mitosis
+
+> **Coefficient**: `fractionChaRNA:phasemitosis`
+> Significant = padj < `r padj_thr`, |shrunk LFC| > `r lfc_thr`
+
+```{r interaction-summary}
+n_sig  <- if (!is.null(int_sig))  nrow(int_sig)  else 0
+n_full <- if (!is.null(int_full)) nrow(int_full) else 0
+n_up   <- if (!is.null(int_sig))  sum(int_sig$log2FoldChange > 0, na.rm=TRUE) else 0
+n_dn   <- n_sig - n_up
+
+cat(sprintf(
+  "Genes tested: %s | Significant: %d (padj<%.2f, |LFC|>%.1f) | Up: %d | Down: %d\n",
+  format(n_full, big.mark=","), n_sig, padj_thr, lfc_thr, n_up, n_dn
+))
+```
+
+## Volcano Plot
+
+```{r volcano, fig.height=5, fig.width=8}
+if (!is.null(int_full) && nrow(int_full) > 0) {
+  vdf <- int_full |>
+    mutate(
+      sig = case_when(
+        padj < padj_thr & log2FoldChange >  lfc_thr ~ "Up in ChaRNA-mitosis",
+        padj < padj_thr & log2FoldChange < -lfc_thr ~ "Down in ChaRNA-mitosis",
+        TRUE ~ "NS"
+      ),
+      label = ifelse(sig != "NS" & !is.na(gene_id),
+                     sub("\\..*", "", gene_id), NA_character_)
+    )
+
+  ggplot(vdf, aes(x=log2FoldChange, y=-log10(pvalue+1e-300), color=sig)) +
+    geom_point(alpha=0.5, size=1.2) +
+    ggrepel::geom_text_repel(aes(label=label), size=2.8, max.overlaps=20,
+                              na.rm=TRUE, show.legend=FALSE) +
+    scale_color_manual(values=c(
+      "Up in ChaRNA-mitosis"   = col_up,
+      "Down in ChaRNA-mitosis" = col_dn,
+      "NS" = col_ns
+    )) +
+    geom_vline(xintercept=c(-lfc_thr, lfc_thr), linetype="dashed", color="grey40") +
+    geom_hline(yintercept=-log10(padj_thr), linetype="dashed", color="grey40") +
+    labs(title="Interaction term: fractionChaRNA:phasemitosis",
+         x="log2FC (interaction)", y="-log10(p-value)", color=NULL) +
+    theme_minimal(base_size=12) + theme(legend.position="top")
+} else cat("Interaction results not available.\n")
+```
+
+## Significant Genes Table
+
+```{r sig-table}
+if (!is.null(int_sig) && nrow(int_sig) > 0) {
+  tbl <- int_sig |>
+    mutate(
+      gene_id_base = sub("\\..*", "", gene_id),
+      LFC_shrunk   = round(log2FoldChange_shrunk, 3),
+      LFC_raw      = round(log2FoldChange, 3),
+      padj_fmt     = formatC(padj, digits=3, format="g"),
+      Direction    = ifelse(log2FoldChange > 0, "↑ ChaRNA-mitosis", "↓ ChaRNA-mitosis")
+    ) |>
+    arrange(padj) |>
+    select(`Gene ID`=gene_id_base, `LFC (shrunk)`=LFC_shrunk,
+           `LFC (raw)`=LFC_raw, padj=padj_fmt,
+           Direction, baseMean)
+
+  DT::datatable(tbl,
+    caption=sprintf("%d genes with significant ChaRNA-specific change in mitosis (padj<%.2f, |LFC|>%.1f)",
+                    nrow(tbl), padj_thr, lfc_thr),
+    options=list(pageLength=20, scrollX=TRUE, dom="Bfrtip", buttons=c("csv","excel")),
+    extensions="Buttons", rownames=FALSE
+  ) |> DT::formatStyle("Direction",
+    color=DT::styleEqual(c("↑ ChaRNA-mitosis","↓ ChaRNA-mitosis"),
+                          c(col_up, col_dn)))
+} else cat("No significant interaction genes at current thresholds.\n")
+```
+
+## Expression Heatmap — Significant Genes
+
+```{r interaction-heatmap, fig.height=8, fig.width=9}
+if (!is.null(int_sig) && nrow(int_sig) > 0 && !is.null(norm_counts)) {
+  sig_ids <- int_sig$gene_id[int_sig$gene_id %in% rownames(norm_counts)]
+  if (length(sig_ids) > 0) {
+    mat <- log2(as.matrix(norm_counts[sig_ids, , drop=FALSE]) + 1)
+    mat_z <- t(scale(t(mat)))   # Z-score per gene
+    mat_z[is.nan(mat_z)] <- 0
+
+    rownames(mat_z) <- sub("\\..*", "", rownames(mat_z))
+
+    ann_col <- if (!is.null(pca_coords)) {
+      data.frame(
+        Fraction = pca_coords$fraction[match(colnames(mat_z), pca_coords$sample_id)],
+        Phase    = pca_coords$phase[match(colnames(mat_z), pca_coords$sample_id)],
+        row.names = colnames(mat_z)
+      )
+    } else NA
+
+    pheatmap::pheatmap(
+      mat_z,
+      color=colorRampPalette(c("#2471A3","white","#C0392B"))(100),
+      annotation_col=ann_col,
+      annotation_colors=list(Fraction=col_frac, Phase=col_phase),
+      cluster_rows=TRUE, cluster_cols=TRUE,
+      show_rownames=TRUE, show_colnames=TRUE,
+      fontsize_row=8, fontsize_col=9,
+      main=sprintf("Z-score expression — %d significant interaction genes", length(sig_ids))
+    )
+  }
+} else cat("Heatmap not available.\n")
+```
+
+---
+
+# Phase Effect (Marginal: Averaged Across Fractions)
+
+> **Coefficient**: `phasemitosis` — overall effect of mitosis regardless of fraction.
+
+```{r phase-summary}
+if (!is.null(phase_all)) {
+  n_phase_sig <- sum(phase_all$padj < padj_thr & abs(phase_all$log2FoldChange) > lfc_thr,
+                     na.rm=TRUE)
+  cat(sprintf("Genes tested: %s | Significant: %d (padj<%.2f, |LFC|>%.1f)\n",
+              format(nrow(phase_all), big.mark=","), n_phase_sig, padj_thr, lfc_thr))
+}
+```
+
+```{r phase-volcano, fig.height=4.5, fig.width=7}
+if (!is.null(phase_all) && nrow(phase_all) > 0) {
+  vdf2 <- phase_all |>
+    mutate(sig = case_when(
+      padj < padj_thr & log2FoldChange >  lfc_thr ~ "Up in mitosis",
+      padj < padj_thr & log2FoldChange < -lfc_thr ~ "Down in mitosis",
+      TRUE ~ "NS"
+    ))
+
+  ggplot(vdf2, aes(x=log2FoldChange, y=-log10(pvalue+1e-300), color=sig)) +
+    geom_point(alpha=0.4, size=1) +
+    scale_color_manual(values=c("Up in mitosis"=col_up,
+                                 "Down in mitosis"=col_dn, NS=col_ns)) +
+    geom_vline(xintercept=c(-lfc_thr, lfc_thr), linetype="dashed", color="grey40") +
+    labs(title="Phase effect (averaged across ChaRNA + totRNA)",
+         x="log2FC (mitosis / interphase)", y="-log10(p-value)", color=NULL) +
+    theme_minimal(base_size=12) + theme(legend.position="top")
+}
+```
+
+---
+
+# Transposable Elements — Interaction
+
+> TE families with a ChaRNA-specific change in mitosis.
+
+```{r te-interaction-table}
+if (!is.null(te_int) && nrow(te_int) > 0) {
+  te_sig <- te_int |>
+    filter(!is.na(padj) & padj < padj_thr) |>
+    mutate(LFC=round(log2FoldChange_shrunk, 3),
+           padj_fmt=formatC(padj, digits=3, format="g")) |>
+    arrange(padj) |>
+    select(Family=family_id, LFC, padj=padj_fmt, baseMean)
+
+  if (nrow(te_sig) > 0) {
+    DT::datatable(te_sig,
+      caption=sprintf("%d TE families with significant ChaRNA-specific change in mitosis",
+                      nrow(te_sig)),
+      options=list(pageLength=15, scrollX=TRUE, dom="Bfrtip", buttons=c("csv","excel")),
+      extensions="Buttons", rownames=FALSE)
+  } else {
+    cat("No TE families with significant interaction at current thresholds.\n")
+  }
+} else cat("TE interaction results not available.\n")
+```
+
+```{r te-int-plot, fig.height=5, fig.width=8}
+if (!is.null(te_int) && nrow(te_int) > 0) {
+  te_df <- te_int |>
+    mutate(sig = !is.na(padj) & padj < padj_thr)
+
+  ggplot(te_df, aes(x=log2FoldChange, y=-log10(pvalue+1e-300),
+                    color=sig, label=ifelse(sig, family_id, NA))) +
+    geom_point(alpha=0.6, size=2) +
+    ggrepel::geom_text_repel(size=2.8, na.rm=TRUE, max.overlaps=15, show.legend=FALSE) +
+    scale_color_manual(values=c("TRUE"=col_up, "FALSE"=col_ns),
+                       labels=c("TRUE"="Significant","FALSE"="NS")) +
+    geom_vline(xintercept=0, linetype="dashed", color="grey50") +
+    labs(title="TE families — interaction term (ChaRNA-specific in mitosis)",
+         x="log2FC (interaction)", y="-log10(p-value)", color=NULL) +
+    theme_minimal(base_size=12)
+}
+```
+
+---
+
+# Session Info
+
+```{r session}
+sessionInfo()
+```
