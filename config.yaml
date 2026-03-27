@@ -3,6 +3,7 @@ comparisons:
   treatment: tumor
 databases:
   arriba_bin: /home/walter/Desktop/references/arriba_v2.4.0/arriba
+  ciri2_path: /home/walter/Desktop/tools/CIRI_v2.0.6/CIRI2.pl
   arriba_db: /home/walter/Desktop/references/arriba_v2.4.0/database
   auto_download: true
   chocophlan_db: /home/walter/Desktop/references/humann3_db/chocophlan
@@ -64,7 +65,7 @@ report:
   remove_test_notes: true
   title: MOSAIC Analysis Report
 samples:
-  coldata: /tmp/coldata.tsv
+  coldata: /home/walter/Desktop/mosaic/mosaic_output/coldata.tsv
   fastq_dir: /home/walter/Desktop/mosaic/fastq
 sequencing:
   read_length: 150

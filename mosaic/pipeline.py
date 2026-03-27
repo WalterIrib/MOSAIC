@@ -671,6 +671,50 @@ class ModuleRunner:
                 _sh.copy(src, integrated / dst_name)
         return True
 
+    # ── M06: circRNA detection (CIRI2) ──────────────────────────────────────
+
+    def _run_m06_circrna(self, comparison=None) -> bool:
+        from .m06_circrna import run_m06
+        cfg     = self.cfg
+        bam_dir = self.out / "mapping" / "bam"
+
+        ciri2_pl = cfg.databases.ciri2_path or "CIRI2.pl"
+        import shutil as _sh
+        if not Path(ciri2_pl).exists() and not _sh.which("CIRI2.pl"):
+            warn("CIRI2.pl not found — skipping m06_circrna")
+            return True   # non-fatal skip
+
+        chimeric_sams = {}
+        for sid in cfg.samples.sample_ids:
+            chim = bam_dir / sid / f"{sid}_Chimeric.out.sam"
+            if chim.exists():
+                chimeric_sams[sid] = chim
+
+        if not chimeric_sams:
+            warn("No chimeric SAMs found — run m04_star first")
+            return False
+
+        comp = self._parse_comparison(comparison)
+        treatment, control = comp if comp else (None, None)
+
+        # Patch cfg so run_m06 can access what it needs
+        cfg_m06      = type("C", (), {})()
+        cfg_m06.output_dir          = str(self.out)
+        cfg_m06.genome_fa           = str(Path(cfg.databases.genome_fa))
+        cfg_m06.gtf                 = str(Path(cfg.databases.gtf))
+        cfg_m06.ciri2_path          = ciri2_pl
+        cfg_m06.threads             = cfg.threads
+        cfg_m06.min_junction_reads  = 2
+        cfg_m06.treatment           = treatment or "tumor"
+        cfg_m06.control             = control  or "normal"
+        import csv as _csv
+        coldata_f = Path(cfg.samples.coldata)
+        with open(coldata_f) as fh:
+            cfg_m06.samples = list(_csv.DictReader(fh, delimiter="\t"))
+
+        result = run_m06(cfg_m06, chimeric_sams)
+        return bool(result)
+
     # ── M02: Trimming ────────────────────────────────────────────────────────
 
     def _run_m02_trim(self, comparison=None) -> bool:
@@ -1742,17 +1786,20 @@ class ModuleRunner:
                 for sid in sids]
 
     def _get_consensus_strandedness(self) -> str:
+        # If config has an explicit value (not "auto"), it always wins
+        cfg_strand = (getattr(self.cfg.library, "_strandedness_config", None) or
+                      getattr(self.cfg.library, "strandedness", None) or "")
+        if cfg_strand and cfg_strand != "auto":
+            return cfg_strand
+
+        # Otherwise use auto-detection result from m07
         strand_map = getattr(self.cfg, "_strandedness", {})
         if strand_map:
             from collections import Counter
             return Counter(strand_map.values()).most_common(1)[0][0]
-        # Try strandedness from config
-        strand = (getattr(self.cfg.library, "strandedness", None) or
-                  getattr(self.cfg.library, "_strandedness_config", None) or
-                  getattr(self.cfg, "strandedness", None) or "RF")
-        if strand == "auto":
-            strand = "RF"
-        return strand
+
+        # Final fallback: unstranded (safe default)
+        return "unstranded"
 
     def _write_coldata(self, comparison: str) -> Path:
         """Write coldata TSV for a specific comparison."""
