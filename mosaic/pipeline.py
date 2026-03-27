@@ -1391,7 +1391,7 @@ class ModuleRunner:
             bam = bam_dir / sid / f"{sid}_Aligned.sortedByCoord.out.bam"
             if not bam.exists():
                 continue
-            sid_out = out_dir / sid
+            sid_out = out_dir / f"{sid}_quant"
             sid_out.mkdir(exist_ok=True)
             ret = run_cmd([
                 "stringtie", str(bam),
