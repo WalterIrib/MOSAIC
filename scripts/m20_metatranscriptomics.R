@@ -86,7 +86,7 @@ all_bracken  <- bind_rows(bracken_list)
 # ── 2. Load Kraken2 reports for summary stats ─────────────────────────────────
 kraken_files <- list.files(opt[["meta-dir"]],
                             pattern="_kraken2_report\\.txt$",
-                            full.names=TRUE)
+                            full.names=TRUE, recursive=TRUE)
 
 kraken_summary <- bind_rows(lapply(kraken_files, function(f) {
   sid <- sub("_kraken2_report\\.txt$", "", basename(f))

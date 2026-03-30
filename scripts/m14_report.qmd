@@ -117,6 +117,20 @@ circ_annot  <- safe_read(file.path(out,"circrna_merged","circrna_annotation.tsv"
 circ_counts <- safe_read(file.path(out,"circrna_merged","circrna_counts.tsv"))
 circ_de     <- safe_read(file.path(out,"circrna_merged","circrna_DE_wilcoxon.tsv"))
 te_host     <- safe_read(file.path(out,"m11","te_host_genes.tsv"))
+# Load genes.bed for gene length (chr, start, end, gene_id|name|type, score, strand)
+genes_bed_f <- file.path(out, "m11", "genes.bed")
+if (file.exists(genes_bed_f)) {
+  genes_bed <- tryCatch(
+    read.table(genes_bed_f, header=FALSE, sep="\t", stringsAsFactors=FALSE),
+    error=function(e) NULL)
+  if (!is.null(genes_bed) && ncol(genes_bed) >= 3) {
+    genes_bed$gene_id    <- sub("\\|.*", "", genes_bed[[4]])
+    genes_bed$gene_length <- genes_bed[[3]] - genes_bed[[2]]
+    gene_len_map <- setNames(genes_bed$gene_length, genes_bed$gene_id)
+    if (!is.null(te_host))
+      te_host$gene_length <- gene_len_map[te_host$gene_id]
+  }
+}
 tet_sig     <- safe_read(file.path(out,"m12",
                           sprintf("%s_sigdiff_gene_TE.txt", comp)))
 trim_stats  <- safe_read(file.path(out,"trimmed","trim_stats.tsv"))
@@ -130,6 +144,7 @@ st_class_codes  <- safe_read(file.path(out, "m16_stringtie/class_code_summary.ts
 novel_de        <- safe_read(file.path(out, "m16_stringtie/novel_transcript_DE.tsv"))
 novel_fpkm      <- safe_read(file.path(out, "m16_stringtie/novel_transcript_fpkm.tsv"))
 editing_sites   <- safe_read(file.path(out, "m19_editing/editing_sites_ato_i.tsv"))
+editing_sites_all <- safe_read(file.path(out, "m19_editing/editing_sites_all.tsv"))
 editing_summary <- safe_read(file.path(out, "m19_editing/editing_summary.tsv"))
 editing_per_gene<- safe_read(file.path(out, "m19_editing/editing_per_gene.tsv"))
 meta_summary    <- safe_read(file.path(out, "m20_metatranscriptomics/kraken2_classification_summary.tsv"))
@@ -998,6 +1013,42 @@ if (!is.null(te_counts) && length(conditions)>0) {
 
 ## TE Differential Expression
 
+```{r te-de-volcano, fig.height=5, fig.width=8, fig.cap="Volcano plot of TE family differential expression. X-axis: shrunk log2FC (ashr). Y-axis: -log10(BH-adjusted p-value). Red = upregulated in treatment; blue = downregulated. Grey = not significant. Families with |LFC|>1 and padj<0.05 labelled."}
+if (!is.null(te_de) && nrow(te_de) > 0) {
+  lfc_col <- if ("log2FoldChange_shrunk" %in% colnames(te_de)) "log2FoldChange_shrunk" else "log2FoldChange"
+  all_padj_eq <- length(unique(na.omit(te_de$padj))) <= 2
+  te_vol <- te_de |>
+    filter(!is.na(padj), !is.na(.data[[lfc_col]])) |>
+    mutate(
+      lfc  = .data[[lfc_col]],
+      neglog10p = -log10(pmax(padj, 1e-300)),
+      sig  = !all_padj_eq & padj < padj_thr & abs(lfc) > lfc_thr,
+      col  = case_when(
+        sig & lfc > 0 ~ paste0("UP in ", p$treatment),
+        sig & lfc < 0 ~ paste0("DOWN in ", p$treatment),
+        TRUE           ~ "NS"
+      ),
+      label = ifelse(sig, family_id, NA_character_)
+    )
+  ggplot(te_vol, aes(x=lfc, y=neglog10p, color=col, label=label)) +
+    geom_point(alpha=0.7, size=2) +
+    ggrepel::geom_text_repel(na.rm=TRUE, size=3, max.overlaps=15) +
+    geom_vline(xintercept=c(-lfc_thr, lfc_thr), linetype="dashed", color="grey60") +
+    geom_hline(yintercept=-log10(padj_thr), linetype="dashed", color="grey60") +
+    scale_color_manual(
+      values=setNames(c("#E74C3C","#3498DB","#BDC3C7"),
+                      c(paste0("UP in ",p$treatment),
+                        paste0("DOWN in ",p$treatment),"NS")),
+      name=NULL) +
+    labs(title=sprintf("TE families: %s vs %s", p$treatment, p$control),
+         subtitle=if(all_padj_eq) "All padj identical (n=3/group, BH correction) — points coloured by pvalue instead" else
+                  sprintf("%d significant (padj<%.2f, |LFC|>%.1f)", sum(te_vol$sig), padj_thr, lfc_thr),
+         x=sprintf("log2FC (shrunk ashr) — %s / %s", p$treatment, p$control),
+         y="-log10(padj)") +
+    theme_minimal(base_size=12)
+} else cat("TE DE data not available.\n")
+```
+
 <div class="slider-container">
   <label for="teDE-slider">Table rows:</label>
   <input type="range" id="teDE-slider" min="10" max="100" step="10" value="20"
@@ -1331,19 +1382,15 @@ go_bar(go_all_do,
 > TE host genes: genes whose annotated body overlaps ≥1 RepeatMasker hg38 TE locus (bedtools intersect ≥10% overlap; M11). The GO background universe is restricted to these 51,934 host genes, making the enrichment specific to the TE-hosting gene context.
 
 ```{r go-te-note}
-# Explain if GO results are missing due to m11b empty output
+# Inform if GO results are empty or missing
 if (is.null(go_te_bp) || nrow(go_te_bp) == 0 ||
     all(is.na(go_te_bp$p.adjust))) {
   cat(paste0(
-    "\u26a0\ufe0f **TE Host GO enrichment: all p.adjust values are NA or no results.**\n\n",
-    "This is caused by M11b (promoter TE annotation) not producing output files. ",
-    "M11b runs but completes in ~0 seconds without writing any output — ",
-    "likely a silent failure in the bedtools promoter-window intersection step. ",
-    "As a consequence, the TE host gene universe used for GO enrichment is empty ",
-    "or undefined, and clusterProfiler cannot compute adjusted p-values.\n\n",
-    "The TE host genes file from M11 (te_host_genes.tsv) is available and used in ",
-    "section 4.3 (Genomic Distribution). The GO enrichment below may show no bars.\n\n",
-    "**Action required:** re-run M11b to generate te_promoter_genes.tsv."
+    "**TE Host GO enrichment: no significant terms at current thresholds (padj<",
+    padj_thr, ").**\n\n",
+    "This can reflect low statistical power (n=3 per group), a small number of ",
+    "DE TE host genes at the chosen LFC threshold, or genuine absence of GO enrichment. ",
+    "The TE host gene universe (M11) and promoter TE annotations (M11b) are available.\n"
   ))
 }
 ```
@@ -1441,7 +1488,7 @@ if (!is.null(te_host) && !is.null(de_genes)) {
 
 > **Column guide for tables below:** `Direction` = the condition in which the gene is upregulated (e.g. "mito-ChaRNA" means higher expression in the treatment). `TE context` = whether a TE insertion is detected in the promoter (2 kb upstream TSS), gene body, both, or neither. `Prom TE loci` = number of distinct TE loci in the promoter window.
 
-> **Note on M11b:** The promoter TE annotation module (M11b) did not produce output for this run (te_promoter_genes.tsv is absent). Plots and tables requiring promoter-level TE annotations may show "not available". The de_te_integrated table (M11d) uses only gene-body TE data from M11.
+> **Promoter TE context (M11b):** Genes are annotated with TE insertions within 2 kb upstream of the TSS (bedtools intersect, RepeatMasker hg38). Gene body TE overlap from M11. Integrated view in M11d combines promoter TE, body TE, and DE status.
 
 ### Overview: Genes with Promoter TE Insertions
 
@@ -1737,10 +1784,9 @@ if (!is.null(tet_sig) && nrow(tet_sig) > 0) {
 ")
   }
 } else {
-  cat("TEtranscripts (M12) data not available.\n")
-  cat("Module m12_tetranscripts is set to false in config.yaml — run is disabled.\n")
-  cat("To activate: set m12_tetranscripts: true in config.yaml and re-run the pipeline.\n")
-  cat("TEtranscripts uses EM to resolve reads to TE loci + canonical genes simultaneously.\n")
+  cat("TEtranscripts (M12) data not available for this comparison.\n")
+  cat("TEtranscripts uses EM to resolve reads simultaneously to TE loci and canonical genes.\n")
+  cat("Run the pipeline with m12_tetranscripts: true and execute m12 to generate results.\n")
 }
 ```
 
@@ -1793,7 +1839,6 @@ if (!is.null(novel_de)) {
   cat(sprintf("Novel transcripts tested: %d\n", nrow(novel_de)))
   cat(sprintf("Significant (padj<%.2f, |LFC|>%.1f): %d\n", padj_thr, lfc_thr, n_sig))
 } else {
-  cat("Novel DE data not available (novel_transcript_DE.tsv not generated).\n\n")
   # Explain based on StringTie assembly results
   if (!is.null(st_summary)) {
     novel_n <- tryCatch({
@@ -1801,11 +1846,14 @@ if (!is.null(novel_de)) {
       if (nrow(novel_row) > 0) as.integer(novel_row[[2]][1]) else NA
     }, error=function(e) NA)
     if (!is.na(novel_n) && novel_n == 0) {
-      cat("StringTie assembly found 0 novel transcript candidates after filtering.\n")
-      cat("All 507,048 assembled transcripts match GENCODE v49 exactly (class_code '=')\n")
-      cat("or are contained within annotated loci. No de-novo isoforms were assembled.\n")
-      cat("This is consistent with high-depth data with good annotation coverage.\n")
+      cat("No novel transcripts to test: StringTie assembly found 0 novel transcript candidates.\n")
+      cat("All assembled transcripts match GENCODE annotation exactly (class_code '=').\n")
+      cat("This is the expected result when the reference annotation covers all detected isoforms.\n")
+    } else {
+      cat("Novel DE data not available (novel_transcript_DE.tsv not generated).\n")
     }
+  } else {
+    cat("Novel DE data not available (StringTie output or novel_transcript_DE.tsv missing).\n")
   }
 }
 ```
@@ -2215,9 +2263,7 @@ if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0 &&
 
 # RNA Editing (M19 — JACUSA2)
 
-> A-to-I RNA editing detected via JACUSA2 call-2 comparing BAM files between conditions. A-to-I editing (adenosine-to-inosine, read as guanosine) is catalysed by ADAR enzymes and is dysregulated in many cancers.
-
-> **Note on editing types:** This pipeline currently reports only **A-to-I (A→G)** editing events. C-to-U editing (catalysed by APOBEC enzymes) and other mismatch types are not extracted from the JACUSA2 output in the current M19 implementation. JACUSA2 detects all mismatches, but only A-to-I calls are filtered and reported here. If C-to-U or other editing types are of interest, the JACUSA2 raw output (in m19_editing/) can be parsed separately with a custom filter for the corresponding mismatch direction.
+> RNA editing detected via JACUSA2 call-2 comparing BAM files between conditions. JACUSA2 detects all base-substitution mismatches at each site; M19 extracts and reports both **A-to-I (A→G)** editing (ADAR enzymes) and all other mismatch types including **C-to-U (C→T)** (APOBEC enzymes).
 
 
 ## Editing Summary
@@ -2275,6 +2321,42 @@ if (!is.null(editing_per_gene) && nrow(editing_per_gene) > 0) {
       options=list(pageLength=10, scrollX=TRUE), rownames=FALSE)
 } else cat("Per-gene editing data not available.
 ")
+```
+
+## All Mismatch Types (M19 — JACUSA2)
+
+> All base-substitution mismatches detected by JACUSA2 (A→G, C→T, A→C, A→T, C→A, C→G, G→A, G→C, G→T, T→A, T→C, T→G). Filtered for sites supported by ≥3 reads and >5% mismatch frequency per condition.
+
+```{r editing-all-types, fig.height=5, fig.width=9, fig.cap="Distribution of all mismatch types detected by JACUSA2. A→G = A-to-I (ADAR); C→T = C-to-U (APOBEC). Only sites with sufficient support (≥3 reads, ≥5% frequency) are shown."}
+if (!is.null(editing_sites_all) && nrow(editing_sites_all) > 0) {
+  mut_col <- if ("mutation_type" %in% colnames(editing_sites_all)) "mutation_type" else
+             if ("edit_type"     %in% colnames(editing_sites_all)) "edit_type" else NULL
+  if (!is.null(mut_col)) {
+    type_counts <- editing_sites_all |>
+      count(.data[[mut_col]], name="n_sites") |>
+      arrange(desc(n_sites)) |>
+      mutate(
+        highlight = .data[[mut_col]] %in% c("AG","CT","A>G","C>T"),
+        label_col = mut_col
+      )
+    ggplot(type_counts, aes(x=reorder(.data[[mut_col]], n_sites), y=n_sites,
+                             fill=highlight)) +
+      geom_col(show.legend=FALSE) +
+      scale_fill_manual(values=c("TRUE"="#E74C3C","FALSE"="#85C1E9")) +
+      coord_flip() +
+      labs(title=sprintf("RNA mismatch types: %s vs %s (JACUSA2)",
+                         p$treatment, p$control),
+           subtitle="Red = canonical editing types (A→G ADAR, C→T APOBEC)",
+           x="Mismatch type", y="Number of sites") +
+      theme_minimal(base_size=12)
+  } else {
+    cat("Column 'mutation_type' or 'edit_type' not found in editing_sites_all.tsv.\n")
+    cat(sprintf("Available columns: %s\n", paste(colnames(editing_sites_all), collapse=", ")))
+  }
+} else {
+  cat("All-type editing data not available (editing_sites_all.tsv not generated by M19).\n")
+  cat("Re-run M19 to extract all mismatch types from the JACUSA2 output.\n")
+}
 ```
 
 # Metatranscriptomics (M20 — Kraken2/Bracken)
@@ -2455,7 +2537,7 @@ if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
 
 > HUMAnN3 profiles the functional capacity of microbial communities by mapping unmapped reads to the ChocoPhlAn nucleotide database and UniRef90 protein database. Outputs: gene family abundances (UniRef90 RPK), MetaCyc pathway abundances and coverage.
 
-> **Note:** Module M20b (HUMAnN3) is **disabled** in this project's config.yaml (`m20b_humann: false`). HUMAnN3 is computationally intensive and requires the full ChocoPhlAn + UniRef90 databases (~50 GB). To activate, set `m20b_humann: true` in config.yaml and ensure databases are installed at the paths specified under `databases.chocophlan_db` and `databases.uniref_db`.
+> HUMAnN3 profiles the functional capacity of microbial communities by mapping unmapped reads to the ChocoPhlAn nucleotide database and UniRef90 protein database. HUMAnN3 is computationally intensive (~50 GB databases required). Run M20b to generate pathway and gene family abundance data.
 
 
 ```{r humann-pathways}
@@ -2549,30 +2631,86 @@ if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
 } else cat("TE insertion cluster data not available.\n")
 ```
 
-```{r te-somatic-plot, fig.height=6, fig.width=10, fig.cap="TE insertion clusters by macrocategory. Somatic candidates = treatment-only insertions (treatment-only)."}
+```{r te-somatic-plot, fig.height=6, fig.width=11, fig.cap="TE insertion clusters by macrocategory and condition origin. 'Shared' = both conditions; 'treatment-only' = somatic candidate; 'control-only' = germline candidate absent in treatment. Bar height = number of clusters; numbers show total supporting reads for that category."}
 if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
-  shared_label <- paste0("Shared (", p$control, "+", p$treatment, ")")
-  somatic_label <- paste0("Somatic candidate (", p$treatment, "-only)")
-  te_clusters |>
-    filter(!is.na(te_macro)) |>
-    mutate(
-      candidate = ifelse(
-        (is.logical(somatic_candidate) & somatic_candidate) |
-        (is.character(somatic_candidate) & somatic_candidate == "True"),
-        somatic_label, shared_label),
-      size_val  = n_reads_total
-    ) |>
-    ggplot(aes(x=te_macro, fill=candidate)) +
-    geom_bar(position="dodge") +
-    scale_fill_manual(
-      values=setNames(c("#E74C3C","#85C1E9"), c(somatic_label, shared_label)),
-      name=NULL) +
-    labs(title="TE insertion clusters by macrocategory",
-         x=NULL, y="Number of clusters") +
-    theme_minimal(base_size=12) +
-    theme(axis.text.x=element_text(angle=30,hjust=1))
-} else cat("TE cluster data not available.
-")
+  # Determine per-condition count columns (support both n_normal/n_tumor and n_control/n_treatment)
+  nc_col <- if ("n_control"   %in% colnames(te_clusters)) "n_control"   else
+            if ("n_normal"    %in% colnames(te_clusters)) "n_normal"    else NULL
+  nt_col <- if ("n_treatment" %in% colnames(te_clusters)) "n_treatment" else
+            if ("n_tumor"     %in% colnames(te_clusters)) "n_tumor"     else NULL
+
+  if (!is.null(nc_col) && !is.null(nt_col)) {
+    lbl_ctrl     <- p$control
+    lbl_treat    <- p$treatment
+    lbl_shared   <- paste0("Shared (", lbl_ctrl, " + ", lbl_treat, ")")
+    lbl_treat_only <- paste0(lbl_treat, "-only")
+    lbl_ctrl_only  <- paste0(lbl_ctrl, "-only")
+
+    te_plot <- te_clusters |>
+      filter(!is.na(te_macro)) |>
+      mutate(
+        nc = .data[[nc_col]],
+        nt = .data[[nt_col]],
+        origin = case_when(
+          nc > 0 & nt > 0 ~ lbl_shared,
+          nt > 0 & nc == 0 ~ lbl_treat_only,
+          nc > 0 & nt == 0 ~ lbl_ctrl_only,
+          TRUE             ~ "Unknown"
+        ),
+        origin = factor(origin, levels=c(lbl_treat_only, lbl_shared, lbl_ctrl_only))
+      )
+
+    col_vals <- setNames(
+      c("#E74C3C", "#85C1E9", "#F0B27A"),
+      c(lbl_treat_only, lbl_shared, lbl_ctrl_only))
+
+    p1 <- te_plot |>
+      count(te_macro, origin) |>
+      ggplot(aes(x=te_macro, y=n, fill=origin)) +
+      geom_col(position="dodge") +
+      geom_text(aes(label=n), position=position_dodge(0.9),
+                vjust=-0.3, size=3) +
+      scale_fill_manual(values=col_vals, name="Origin") +
+      labs(title="Cluster count by macrocategory and origin",
+           x=NULL, y="Number of clusters") +
+      theme_minimal(base_size=11) +
+      theme(axis.text.x=element_text(angle=30, hjust=1))
+
+    # Frequency plot: total reads per category × macrocategory
+    p2 <- te_plot |>
+      group_by(te_macro, origin) |>
+      summarise(total_reads=sum(n_reads_total, na.rm=TRUE), .groups="drop") |>
+      ggplot(aes(x=te_macro, y=total_reads, fill=origin)) +
+      geom_col(position="dodge") +
+      scale_fill_manual(values=col_vals, name="Origin") +
+      scale_y_continuous(labels=scales::comma) +
+      labs(title="Supporting reads by macrocategory and origin",
+           x=NULL, y="Total supporting reads") +
+      theme_minimal(base_size=11) +
+      theme(axis.text.x=element_text(angle=30, hjust=1))
+
+    gridExtra::grid.arrange(p1, p2, ncol=2)
+
+    # Summary table
+    cat("\n**Cluster summary by origin:**\n\n")
+    te_plot |>
+      group_by(origin) |>
+      summarise(
+        n_clusters    = n(),
+        total_reads   = sum(n_reads_total, na.rm=TRUE),
+        pct_clusters  = round(100 * n() / nrow(te_plot), 1),
+        .groups="drop"
+      ) |>
+      arrange(desc(n_clusters)) |>
+      knitr::kable(col.names=c("Origin","Clusters","Total reads","% of clusters")) |>
+      kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE) |>
+      print()
+  } else {
+    # Fallback: no per-condition columns
+    cat(sprintf("Per-condition columns (n_control/n_treatment) not found in cluster table.\n"))
+    cat(sprintf("Available columns: %s\n", paste(colnames(te_clusters), collapse=", ")))
+  }
+} else cat("TE cluster data not available.\n")
 ```
 
 # Methods

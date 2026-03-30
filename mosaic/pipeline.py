@@ -1301,23 +1301,36 @@ class ModuleRunner:
     # ── M11c: TE age ─────────────────────────────────────────────────────────
 
     def _run_m11c_te_age(self, comparison=None) -> bool:
-        cfg      = self.cfg
-        comp     = self._parse_comparison(comparison)
+        cfg = self.cfg
+        comp = self._parse_comparison(comparison)
         if not comp:
             return False
         treatment, control = comp
-        comp_dir = self._comparison_dir(comparison)
-        te_de    = comp_dir / "deseq2" / f"TE_{comparison}_DE.tsv"
+
+        # Resolve comparison name for file paths (None → first non-interaction)
+        if comparison is None:
+            comp_name = None
+            for c in (cfg.comparisons or []):
+                if c.get("type") != "interaction":
+                    comp_name = f"{c['treatment']}_vs_{c['control']}"
+                    break
+            if comp_name is None:
+                return False
+        else:
+            comp_name = comparison
+
+        comp_dir = self._comparison_dir(comp_name)
+        te_de    = comp_dir / "deseq2" / f"TE_{comp_name}_DE.tsv"
         out_dir  = self.out / "m11c"
         out_dir.mkdir(parents=True, exist_ok=True)
 
         return run_r_script(self.scripts / "m11c_te_age.R", [
             "--te-de",     str(te_de),
-            "--rmsk-bed",  str(Path(cfg.databases.rmsk_bed)),
+            "--rmsk-full", str(Path(cfg.databases.rmsk_bed)),  # UCSC gz for milliDiv
             "--outdir",    str(out_dir),
             "--treatment", treatment,
             "--control",   control,
-        ], log_file=self._log("m11c_te_age", comparison)) == 0
+        ], log_file=self._log("m11c_te_age", comp_name)) == 0
 
     # ── M11d: TE DE integration ───────────────────────────────────────────────
 
@@ -1676,16 +1689,18 @@ class ModuleRunner:
 
         return run_cmd([
             sys.executable, "-m", "mosaic.m23_te_insertions",
-            "--chimeric-normal",  normal_chim,
-            "--chimeric-tumor",   tumor_chim,
-            "--te-consensus",     str(Path(cfg.databases.te_consensus)),
-            "--genome-fa",        str(Path(cfg.databases.genome_fa)),
-            "--gtf",              str(Path(cfg.databases.gtf)),
-            "--outdir",           str(out_dir),
-            "--threads",          str(cfg.threads),
-            "--min-clip",         str(cfg.thresholds.min_clip_te),
-            "--min-support",      str(cfg.thresholds.min_support_te),
-            "--min-mapq",         "0",
+            "--chimeric-normal",       normal_chim,
+            "--chimeric-tumor",        tumor_chim,
+            "--te-consensus",          str(Path(cfg.databases.te_consensus)),
+            "--genome-fa",             str(Path(cfg.databases.genome_fa)),
+            "--gtf",                   str(Path(cfg.databases.gtf)),
+            "--outdir",                str(out_dir),
+            "--threads",               str(cfg.threads),
+            "--min-clip",              str(cfg.thresholds.min_clip_te),
+            "--min-support",           str(cfg.thresholds.min_support_te),
+            "--min-mapq",              "0",
+            "--condition-control",     control,
+            "--condition-treatment",   treatment,
         ], cwd=self.scripts.parent, log_file=self._log("m23_te_insertions")) == 0
 
     # ── M15: Fusion genes (Arriba) ───────────────────────────────────────────

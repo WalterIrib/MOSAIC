@@ -58,6 +58,10 @@ def parse_args():
     p.add_argument("--aligner",         default="bwa",
                    choices=["bwa","minimap2"],
                    help="Aligner for clipped sequences [bwa]")
+    p.add_argument("--condition-control",   default="control",
+                   help="Name of the control condition (replaces 'normal' labels)")
+    p.add_argument("--condition-treatment", default="treatment",
+                   help="Name of the treatment condition (replaces 'tumor' labels)")
     return p.parse_args()
 
 
@@ -282,7 +286,8 @@ def parse_te_family(te_chrom):
 
 
 # ── Cluster insertion sites ────────────────────────────────────────────────────
-def cluster_insertions(merged_df, cluster_dist):
+def cluster_insertions(merged_df, cluster_dist,
+                       cond_control="control", cond_treatment="treatment"):
     """
     Cluster nearby insertion sites on same chromosome.
     Returns DataFrame with one row per cluster.
@@ -316,8 +321,8 @@ def cluster_insertions(merged_df, cluster_dist):
             "start":          int(df_c["pos"].min()),
             "end":            int(df_c["pos"].max() + 150),
             "n_reads_total":  len(df_c),
-            "n_normal":       int((df_c["condition"]=="normal").sum()),
-            "n_tumor":        int((df_c["condition"]=="tumor").sum()),
+            "n_control":      int((df_c["condition"]==cond_control).sum()),
+            "n_treatment":    int((df_c["condition"]==cond_treatment).sum()),
             "te_family":      te_fam,
             "te_macro":       te_macro,
             "samples":        ",".join(sorted(df_c["sample_id"].unique())),
@@ -327,8 +332,8 @@ def cluster_insertions(merged_df, cluster_dist):
     df_clusters = pd.DataFrame(cluster_rows)
     if not df_clusters.empty:
         df_clusters["somatic_candidate"] = (
-            (df_clusters["n_tumor"] >= 1) &
-            (df_clusters["n_normal"] == 0)
+            (df_clusters["n_treatment"] >= 1) &
+            (df_clusters["n_control"] == 0)
         )
     return df_clusters
 
@@ -390,18 +395,20 @@ def main():
 
     log.info("M23 - TE somatic insertion detection")
 
-    normal_files = args.chimeric_normal.split(",")
-    tumor_files  = args.chimeric_tumor.split(",")
+    cond_control   = args.condition_control
+    cond_treatment = args.condition_treatment
+    normal_files   = args.chimeric_normal.split(",")
+    tumor_files    = args.chimeric_tumor.split(",")
 
     # 1. Parse chimeric SAMs
-    df_normal = parse_chimeric_sam(normal_files, "normal",
+    df_normal = parse_chimeric_sam(normal_files, cond_control,
                                     args.min_clip, args.min_mapq)
-    df_tumor  = parse_chimeric_sam(tumor_files,  "tumor",
+    df_tumor  = parse_chimeric_sam(tumor_files,  cond_treatment,
                                     args.min_clip, args.min_mapq)
 
     df_all = pd.concat([df_normal, df_tumor], ignore_index=True)
     log.info(f"Total soft-clips: {len(df_all)} "
-             f"(normal: {len(df_normal)}, tumor: {len(df_tumor)})")
+             f"({cond_control}: {len(df_normal)}, {cond_treatment}: {len(df_tumor)})")
 
     if df_all.empty:
         log.warning("No soft-clips found — check --min-clip parameter")
@@ -453,7 +460,8 @@ def main():
                      sep="\t", index=False)
 
     # 4. Cluster insertion sites
-    clusters = cluster_insertions(merged_df, args.cluster_dist)
+    clusters = cluster_insertions(merged_df, args.cluster_dist,
+                                  cond_control, cond_treatment)
 
     if clusters.empty:
         log.warning("No insertion clusters found")
@@ -479,7 +487,7 @@ def main():
         {"metric": "Total soft-clips analysed",        "value": len(df_all)},
         {"metric": "Clips mapping to TE consensus",    "value": len(te_hits)},
         {"metric": "Insertion clusters (all)",         "value": len(clusters)},
-        {"metric": "Somatic candidates (tumor-only)",  "value": len(somatic)},
+        {"metric": f"Somatic candidates ({cond_treatment}-only)",  "value": len(somatic)},
         {"metric": "SINE insertions",
          "value": int((clusters["te_macro"]=="SINE").sum())},
         {"metric": "LINE insertions",
@@ -496,13 +504,13 @@ def main():
 
     if len(somatic) > 0:
         log.info(f"\nTop somatic TE insertion candidates:")
-        top = somatic.sort_values("n_tumor", ascending=False).head(10)
+        top = somatic.sort_values("n_treatment", ascending=False).head(10)
         for _, row in top.iterrows():
             gene = row.get("gene_name", "intergenic")
             log.info(f"  {row['chrom']}:{row['start']}-{row['end']} | "
                      f"{row['te_family']} ({row['te_macro']}) | "
                      f"gene: {gene} | "
-                     f"tumor reads: {row['n_tumor']}")
+                     f"{cond_treatment} reads: {row['n_treatment']}")
 
     log.info(f"[OK] M23 complete. Output: {args.outdir}")
 

@@ -238,6 +238,63 @@ def filter_ato_i(df, min_score, min_ef):
     return df_filt
 
 
+# ── Filter all mismatch types ─────────────────────────────────────────────────
+def filter_all_edits(df, min_score, min_ef, min_cov=3):
+    """
+    Extract all base-substitution mismatch types from JACUSA2 output.
+    For each site, identifies the predominant non-ref base in condition 2 (treatment).
+    Returns one row per (site, mutation_type) with editing frequency per condition.
+    Filters: JACUSA2 score >= min_score, EF2 >= min_ef, coverage >= min_cov.
+    """
+    if df.empty:
+        return pd.DataFrame()
+
+    bases  = ["A", "C", "G", "T"]
+    rows   = []
+
+    df["total1"] = df["A1"] + df["C1"] + df["G1"] + df["T1"]
+    df["total2"] = df["A2"] + df["C2"] + df["G2"] + df["T2"]
+
+    for _, s in df.iterrows():
+        ref = s["ref"]
+        if ref not in bases:
+            continue
+        if s["total1"] < min_cov or s["total2"] < min_cov:
+            continue
+        if s["score"] < min_score:
+            continue
+        for alt in bases:
+            if alt == ref:
+                continue
+            col1 = f"{alt}1"
+            col2 = f"{alt}2"
+            if col1 not in s.index or col2 not in s.index:
+                continue
+            ef2 = s[col2] / max(s["total2"], 1)
+            if ef2 < min_ef:
+                continue
+            ef1 = s[col1] / max(s["total1"], 1)
+            rows.append({
+                "chrom":          s["chrom"],
+                "start":          s["start"],
+                "end":            s["end"],
+                "strand":         s.get("strand", "."),
+                "ref":            ref,
+                "alt":            alt,
+                "mutation_type":  f"{ref}>{alt}",
+                "score":          s["score"],
+                "EF1":            round(ef1, 4),
+                "EF2":            round(ef2, 4),
+                "dEF":            round(ef2 - ef1, 4),
+                "cov1":           int(s["total1"]),
+                "cov2":           int(s["total2"]),
+            })
+
+    result = pd.DataFrame(rows)
+    log.info(f"All-type editing sites: {len(result)} (across all mismatch types)")
+    return result
+
+
 # ── Annotate with gene/region ──────────────────────────────────────────────────
 def annotate_sites(df, gtf, outdir):
     """Annotate editing sites with gene name and genomic region using bedtools."""
@@ -368,6 +425,14 @@ def main():
 
     # 3. Filter A-to-I
     df_ai = filter_ato_i(df_raw, args.min_score, args.min_ef)
+
+    # 3b. Extract all mismatch types
+    df_all_edits = filter_all_edits(df_raw, args.min_score, args.min_ef)
+    if not df_all_edits.empty:
+        out_all = os.path.join(args.outdir, "editing_sites_all.tsv")
+        df_all_edits.to_csv(out_all, sep="\t", index=False)
+        log.info(f"Saved all-type editing sites: {out_all} ({len(df_all_edits)} rows)")
+
     if df_ai.empty:
         log.warning("No A-to-I sites after filtering")
         # Save empty file
