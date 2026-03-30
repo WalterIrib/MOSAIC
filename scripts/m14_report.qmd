@@ -108,7 +108,11 @@ col_macro <- c(
 te_counts   <- safe_read(file.path(out,"integrated","te_counts_clean.tsv"))
 sat_counts  <- safe_read(file.path(out,"integrated","satellite_counts_clean.tsv"))
 gene_map    <- safe_read(file.path(out,"integrated","gene_type_map.tsv"))
-coldata     <- safe_read(if (nzchar(params$coldata_path)) params$coldata_path else "/tmp/coldata.tsv")
+coldata_all <- safe_read(if (nzchar(params$coldata_path)) params$coldata_path else "/tmp/coldata.tsv")
+# Filter to comparison samples only (fixes all per-condition plots)
+coldata <- if (!is.null(coldata_all) && nchar(p$treatment) > 0) {
+  coldata_all[coldata_all$condition %in% c(p$treatment, p$control), , drop=FALSE]
+} else coldata_all
 circ_annot  <- safe_read(file.path(out,"circrna_merged","circrna_annotation.tsv"))
 circ_counts <- safe_read(file.path(out,"circrna_merged","circrna_counts.tsv"))
 circ_de     <- safe_read(file.path(out,"circrna_merged","circrna_DE_wilcoxon.tsv"))
@@ -152,6 +156,8 @@ de_genes    <- safe_read(file.path(comp_dir,"deseq2",
                           sprintf("genes_%s_DE.tsv", comp)))
 te_de       <- safe_read(file.path(comp_dir,"deseq2",
                           sprintf("TE_%s_DE.tsv", comp)))
+sat_de      <- safe_read(file.path(comp_dir,"deseq2",
+                          sprintf("satellite_%s_DE.tsv", comp)))
 pca_coords    <- safe_read(file.path(comp_dir, "deseq2/pca_coordinates.tsv"))
 tpm_counts    <- safe_read(file.path(comp_dir, "deseq2/tpm_counts.tsv"))
 de_te_integrated   <- safe_read(file.path(comp_dir, "m11d/de_te_integrated.tsv"))
@@ -168,7 +174,7 @@ top_a5ss        <- safe_read(file.path(comp_dir, "m17_rmats/top_A5SS_events.tsv"
 top_mxe         <- safe_read(file.path(comp_dir, "m17_rmats/top_MXE_events.tsv"))
 top_ri          <- safe_read(file.path(comp_dir, "m17_rmats/top_RI_events.tsv"))
 spliced_de      <- safe_read(file.path(comp_dir, "m17_rmats/spliced_and_de_overlap.tsv"))
-string_hubs     <- safe_read(file.path(comp_dir, "m18/string_hub_genes.tsv"))
+string_hubs     <- safe_read(file.path(comp_dir, "m18/wgcna_hub_genes.tsv"))
 wgcna_modules   <- safe_read(file.path(comp_dir, "m18/wgcna_module_genes.tsv"))
 wgcna_mt_cor    <- safe_read(file.path(comp_dir, "m18/wgcna_module_trait_correlation.tsv"))
 go_up_bp   <- safe_read(file.path(comp_dir,"go","genes_UP_GO_BP.tsv"))
@@ -216,6 +222,10 @@ de_sig <- if (!is.null(de_genes)) {
 te_sig <- if (!is.null(te_de)) {
   te_de[!is.na(te_de$padj) & te_de$padj < padj_thr, ]
 } else data.frame()
+
+sat_sig <- if (!is.null(sat_de)) {
+  sat_de[!is.na(sat_de$padj) & sat_de$padj < padj_thr, ]
+} else data.frame()
 ```
 
 # Executive Summary {.unnumbered}
@@ -235,13 +245,14 @@ data.frame(
   Category  = c("Protein-coding genes quantified","lncRNA genes quantified",
                 "TE families detected","Satellite families detected",
                 "circRNA loci detected","DE genes — canonical",
-                "DE TE families","DE circRNA loci"),
+                "DE TE families","DE satellite families","DE circRNA loci"),
   Count     = c(format(n_pc,big.mark=","), format(n_lnc,big.mark=","),
                 format(n_te,big.mark=","),  format(n_sat,big.mark=","),
                 format(n_circ,big.mark=","),
-                nrow(de_sig), nrow(te_sig), n_circ_sig),
+                nrow(de_sig), nrow(te_sig), nrow(sat_sig), n_circ_sig),
   Threshold = c("","","","","",
                 sprintf("padj<%.2f & |LFC|>%.1f", padj_thr, lfc_thr),
+                sprintf("padj<%.2f", padj_thr),
                 sprintf("padj<%.2f", padj_thr),
                 sprintf("padj<%.2f & |LFC|>%.1f", padj_thr, lfc_thr))
 ) |>
@@ -260,11 +271,14 @@ data.frame(
 
 ```{r qc-trim}
 if (!is.null(trim_stats)) {
-  trim_stats |>
+  sids_comp <- if (!is.null(coldata)) coldata$sample_id else character(0)
+  ts <- if (length(sids_comp) > 0) trim_stats[trim_stats$sample_id %in% sids_comp, ] else trim_stats
+  ts |>
     mutate(pct_kept=round(reads_after/reads_before*100,1)) |>
-    select(sample_id, condition, reads_before, reads_after, pct_kept,
-           any_of(c("q30_rate","mean_len_r1"))) |>
-    kable(caption="Per-sample trimming statistics (fastp). Adapter auto-detection; Q20 quality filter; minimum length 36bp. pct_kept: fraction of reads passing all filters.") |>
+    select(any_of(c("sample_id","condition","reads_before","reads_after",
+                    "pct_kept","q30_rate","mean_len_r1"))) |>
+    kable(caption=sprintf("Per-sample trimming statistics (fastp) — %s vs %s. Adapter auto-detection; Q20 quality filter; minimum length 36bp.",
+                          p$treatment, p$control)) |>
     kable_styling(bootstrap_options=c("striped","hover","condensed"))
 }
 ```
@@ -273,8 +287,17 @@ if (!is.null(trim_stats)) {
 
 ```{r qc-map}
 if (!is.null(strand_df)) {
-  kable(strand_df,
-        caption="Per-sample STAR mapping rates and strandedness inference (RSeQC infer_experiment.py). featureCounts was run with the consensus strandedness setting.") |>
+  # Filter to comparison samples
+  sids_comp <- if (!is.null(coldata)) coldata$sample_id else character(0)
+  sd <- if (length(sids_comp) > 0) strand_df[strand_df$sample_id %in% sids_comp, ] else strand_df
+  kable(sd,
+        caption=paste0(
+          "Per-sample STAR mapping rates and strandedness inference (RSeQC infer_experiment.py). ",
+          "Note: RSeQC classifies as 'unstranded' when frac_fr < 0.80; this dataset shows ",
+          "frac_fr ~0.55-0.68 (borderline FR, high failed-assignment fraction typical of ",
+          "chromatin-associated RNA). featureCounts was run with strandedness from config ",
+          "(sequencing.strandedness in config.yaml); strand_fc=0 is the RSeQC detection, ",
+          "not what featureCounts used.")) |>
     kable_styling(bootstrap_options=c("striped","hover","condensed"))
 }
 ```
@@ -955,6 +978,107 @@ if (!is.null(te_de) && nrow(te_de)>0) {
 
 ---
 
+## Satellite Repeat Differential Expression
+
+Satellite repeats (pericentromeric, centromeric, telomeric) are quantified via pseudochromosome alignment (Bowtie2) to DFAM 3.9 satellite consensus sequences. They are analysed separately from TE families because they require independent normalisation and have distinct biological roles — particularly relevant for chromatin-associated RNA studies where satellite enrichment reflects heterochromatin dynamics.
+
+```{r sat-volcano, fig.height=5, fig.width=8, fig.cap="Volcano plot of satellite repeat families. X-axis: shrunk log2FC (ashr). Y-axis: -log10(BH-adjusted p-value). Red = significantly upregulated in treatment; blue = downregulated. Grey = not significant. Families with |LFC|>1 and padj<0.05 labelled."}
+if (!is.null(sat_de) && nrow(sat_de) > 0) {
+  all_padj_eq_sat <- length(unique(na.omit(sat_de$padj))) <= 2
+  lfc_col <- if ("log2FoldChange_shrunk" %in% colnames(sat_de)) "log2FoldChange_shrunk" else "log2FoldChange"
+  pval_col <- if (all_padj_eq_sat) "pvalue" else "padj"
+  sat_de |>
+    filter(!is.na(!!sym(lfc_col)), !is.na(!!sym(pval_col))) |>
+    mutate(
+      lfc   = !!sym(lfc_col),
+      pval  = !!sym(pval_col),
+      negLP = pmin(-log10(pval + 1e-300), 50),
+      sig   = !is.na(padj) & padj < padj_thr & abs(lfc) > lfc_thr,
+      dir   = case_when(
+        sig & lfc > 0 ~ paste0("Up in ", p$treatment),
+        sig & lfc < 0 ~ paste0("Down in ", p$treatment),
+        TRUE ~ "n.s."
+      ),
+      label = ifelse(sig, family_id, NA_character_)
+    ) |>
+    ggplot(aes(x=lfc, y=negLP, color=dir, label=label)) +
+    geom_point(alpha=0.8, size=2.5) +
+    ggrepel::geom_text_repel(size=3, max.overlaps=20, show.legend=FALSE) +
+    geom_hline(yintercept=-log10(padj_thr), linetype="dashed", color="grey40") +
+    geom_vline(xintercept=c(-lfc_thr, lfc_thr), linetype="dashed", color="grey40") +
+    scale_color_manual(values=c(
+      setNames(col_up, paste0("Up in ", p$treatment)),
+      setNames(col_down, paste0("Down in ", p$treatment)),
+      "n.s."=col_ns), name=NULL) +
+    labs(title=sprintf("Satellite DE — %s vs %s", p$treatment, p$control),
+         x=sprintf("log2FC (%s / %s)", p$treatment, p$control),
+         y=if(all_padj_eq_sat) "-log10(p-value)" else "-log10(padj)") +
+    theme_minimal(base_size=12) + theme(legend.position="top")
+} else cat("Satellite DE data not available.\n")
+```
+
+```{r sat-top, fig.height=5, fig.width=9, fig.cap="Top 20 satellite families by mean expression across all comparison samples. Bar height = mean fragment counts; error bars = SD across replicates within condition. Pseudochromosome approach (Bowtie2 --very-sensitive-local, DFAM 3.9 satellite consensus)."}
+if (!is.null(sat_counts) && !is.null(coldata) && nrow(coldata) > 0) {
+  num_cols_sat <- sapply(sat_counts, is.numeric)
+  fam_ids_sat  <- sat_counts[, 1]
+  sids_sat     <- intersect(colnames(sat_counts)[num_cols_sat], coldata$sample_id)
+  if (length(sids_sat) > 0) {
+    sat_long <- data.frame(family_id=fam_ids_sat,
+                            sat_counts[, sids_sat, drop=FALSE]) |>
+      pivot_longer(-family_id, names_to="sample_id", values_to="count") |>
+      mutate(condition=conditions[sample_id]) |>
+      filter(!is.na(condition))
+
+    top20_sat <- sat_long |>
+      group_by(family_id) |> summarise(tot=sum(count), .groups="drop") |>
+      slice_max(tot, n=20) |> arrange(desc(tot)) |> pull(family_id)
+
+    sat_long |>
+      filter(family_id %in% top20_sat) |>
+      mutate(family_id=factor(family_id, levels=rev(top20_sat))) |>
+      group_by(family_id, condition) |>
+      summarise(mean_c=mean(count), sd_c=sd(count), .groups="drop") |>
+      ggplot(aes(x=family_id, y=mean_c+1, fill=condition)) +
+      geom_col(position=position_dodge(width=0.8), width=0.7) +
+      geom_errorbar(aes(ymin=pmax(mean_c-sd_c,0)+1, ymax=mean_c+sd_c+1),
+                    position=position_dodge(width=0.8), width=0.3, linewidth=0.5) +
+      coord_flip() + scale_y_log10(labels=scales::comma) +
+      scale_fill_manual(values=col_cond) +
+      labs(title="Top 20 satellite families — mean ± SD per condition",
+           x=NULL, y="Mean counts+1 (log10)", fill=NULL) +
+      theme_minimal(base_size=9) + theme(legend.position="top")
+  } else cat("No satellite count data for comparison samples.\n")
+} else cat("Satellite count data not available.\n")
+```
+
+```{r sat-de-table}
+if (!is.null(sat_sig) && nrow(sat_sig) > 0) {
+  cat(sprintf("**%d satellite families significantly DE** (padj < %.2f", nrow(sat_sig), padj_thr))
+  if (nrow(sat_sig) > 0) {
+    lfc_col_s <- if ("log2FoldChange_shrunk" %in% colnames(sat_sig)) "log2FoldChange_shrunk" else "log2FoldChange"
+    sat_sig |>
+      arrange(padj) |>
+      select(family_id, any_of(c("baseMean","log2FoldChange","log2FoldChange_shrunk","pvalue","padj"))) |>
+      mutate(across(where(is.numeric), ~round(., 4))) |>
+      DT::datatable(caption=sprintf("Significant satellite families (%s vs %s, padj < %.2f)",
+                                     p$treatment, p$control, padj_thr),
+                    options=list(pageLength=15, scrollX=TRUE), rownames=FALSE)
+  }
+} else if (!is.null(sat_de)) {
+  all_padj_eq_sat2 <- length(unique(na.omit(sat_de$padj))) <= 2
+  top_sat <- sat_de |> filter(!is.na(pvalue)) |>
+    arrange(if(all_padj_eq_sat2) pvalue else padj) |> head(20)
+  cat(sprintf("No satellite families reach padj < %.2f threshold. Top families by p-value:\n\n", padj_thr))
+  top_sat |>
+    select(family_id, any_of(c("baseMean","log2FoldChange","log2FoldChange_shrunk","pvalue","padj"))) |>
+    mutate(across(where(is.numeric), ~round(., 4))) |>
+    knitr::kable(caption="Satellite families ranked by p-value (none reach significance threshold)") |>
+    kableExtra::kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+} else cat("Satellite DE data not available.\n")
+```
+
+---
+
 ## TE Age Analysis (M11c)
 
 ```{r te-age-landscape, fig.height=5, fig.width=10, fig.cap="TE age landscape: distribution of RepeatMasker substitution divergence per macrocategory. Low divergence = recently inserted (young/active); high divergence = ancient insertions. SVA elements show the youngest profile, consistent with ongoing retrotransposition in humans."}
@@ -980,7 +1104,7 @@ if (!is.null(te_age_summary)) {
 }
 ```
 
-```{r te-age-de, fig.height=6, fig.width=9, fig.cap="Correlation between TE family age (mean divergence from consensus) and differential expression (log2FC tumor vs normal). Point size proportional to number of genomic loci. Labels indicate families with significant expression changes."}
+```{r te-age-de, fig.height=6, fig.width=9, fig.cap="Correlation between TE family age (mean divergence from consensus) and differential expression (log2FC). Point size proportional to number of genomic loci. Labels indicate families with significant expression changes."}
 if (!is.null(te_age_de_tbl) && nrow(te_age_de_tbl) >= 5) {
   lfc_col  <- grep("log2", colnames(te_age_de_tbl), value=TRUE)[1]
   pval_col <- if ("pvalue" %in% colnames(te_age_de_tbl)) "pvalue" else "padj"
@@ -1875,41 +1999,34 @@ if (!is.null(fusion_merged) && nrow(fusion_merged) > 0) {
 
 # Network Analysis (M18)
 
-## STRINGdb Protein Interaction Network
+## WGCNA Hub Genes
 
 ```{r string-hubs}
 if (!is.null(string_hubs) && nrow(string_hubs) > 0) {
   string_hubs |>
     head(20) |>
-    select(any_of(c("STRING_id","gene_name","degree","log2FC","padj","confidence"))) |>
-    DT::datatable(caption="Hub genes by PPI degree (STRINGdb)",
+    select(any_of(c("gene_id","gene_name","module","kME_inmodule","log2FC","padj"))) |>
+    DT::datatable(caption="Top WGCNA hub genes per module (ranked by intramodular kME)",
                   options=list(pageLength=10), rownames=FALSE)
 } else {
-  cat("STRINGdb results not available — run M18 first.
-")
-  cat("Command: Rscript scripts/m18_network.R --de-genes ... --norm-counts ...
+  cat("WGCNA hub gene results not available — run M18 first.
 ")
 }
 ```
 
-```{r string-hub-plot, fig.height=5, fig.width=9, fig.cap="Top hub genes by PPI degree (STRINGdb). Degree = number of interactions. Color = expression direction."}
-if (!is.null(string_hubs) && nrow(string_hubs) > 0 && "degree" %in% colnames(string_hubs)) {
+```{r string-hub-plot, fig.height=5, fig.width=9, fig.cap="Top WGCNA hub genes ranked by intramodular connectivity (kME). Color = co-expression module."}
+if (!is.null(string_hubs) && nrow(string_hubs) > 0 && "kME_inmodule" %in% colnames(string_hubs)) {
   string_hubs |>
-    arrange(desc(degree)) |>
+    arrange(desc(kME_inmodule)) |>
     head(20) |>
     mutate(
       label = ifelse(!is.na(gene_name) & gene_name != "" & gene_name != "NA",
-                     gene_name, STRING_id),
-      dir = case_when(
-        !is.na(log2FC) & log2FC > 0 ~ paste0("Up in ", p$treatment),
-        !is.na(log2FC) & log2FC < 0 ~ paste0("Down in ", p$treatment),
-        TRUE ~ "Not DE"
-      )
+                     gene_name, gene_id)
     ) |>
-    ggplot(aes(x=reorder(label, degree), y=degree, fill=dir)) +
+    ggplot(aes(x=reorder(label, kME_inmodule), y=kME_inmodule, fill=module)) +
     geom_col() + coord_flip() +
-    scale_fill_manual(values=c("#E74C3C","#3498DB","#BDC3C7"), name=NULL) +
-    labs(title="STRINGdb hub genes", x=NULL, y="Degree") +
+    scale_fill_identity() +
+    labs(title="WGCNA hub genes", x=NULL, y="kME (intramodular connectivity)") +
     theme_minimal(base_size=12)
 } else cat("Hub gene plot not available.\n")
 ```
@@ -1953,7 +2070,7 @@ if (!is.null(wgcna_modules) && nrow(wgcna_modules) > 0) {
 } else cat("Module plot not available.\n")
 ```
 
-```{r wgcna-trait-cor, fig.height=5, fig.width=8, fig.cap="WGCNA module-condition correlation. * = p<0.05. Positive = higher in tumor."}
+```{r wgcna-trait-cor, fig.height=5, fig.width=8, fig.cap="WGCNA module-condition correlation. * = p<0.05. Positive = higher in treatment condition."}
 if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0) {
   p1 <- wgcna_mt_cor |>
     arrange(pvalue) |>
@@ -1966,7 +2083,8 @@ if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0) {
     geom_hline(yintercept=0, linewidth=0.5) +
     coord_flip() +
     scale_fill_manual(values=c("TRUE"="#E74C3C","FALSE"="#3498DB"), name=NULL,
-                      labels=c("TRUE"="Higher in tumor","FALSE"="Higher in normal")) +
+                      labels=c("TRUE"=paste0("Higher in ",p$treatment),
+                               "FALSE"=paste0("Higher in ",p$control))) +
     labs(title="Module-condition correlation",
          subtitle="* = p<0.05", x="Module", y="Pearson r") +
     theme_minimal(base_size=12)
@@ -1982,7 +2100,7 @@ if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0) {
 
 # RNA Editing (M19 — JACUSA2)
 
-> A-to-I RNA editing detected via JACUSA2 call-2 comparing normal vs tumor BAM files. A-to-I editing (adenosine-to-inosine, read as guanosine) is catalysed by ADAR enzymes and is dysregulated in many cancers.
+> A-to-I RNA editing detected via JACUSA2 call-2 comparing BAM files between conditions. A-to-I editing (adenosine-to-inosine, read as guanosine) is catalysed by ADAR enzymes and is dysregulated in many cancers.
 
 
 ## Editing Summary
@@ -1991,7 +2109,7 @@ if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0) {
 if (!is.null(editing_summary) && nrow(editing_summary) > 0) {
   knitr::kable(editing_summary,
     col.names=c("Metric","Value"),
-    caption="RNA A-to-I editing summary (JACUSA2). EF = editing frequency (edited reads / total reads). dEF = EF(tumor) - EF(normal).") |>
+    caption=sprintf("RNA A-to-I editing summary (JACUSA2). EF = editing frequency (edited reads / total reads). dEF = EF(%s) - EF(%s).", p$treatment, p$control)) |>
     kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
 } else cat("RNA editing summary not available.
 ")
@@ -1999,7 +2117,7 @@ if (!is.null(editing_summary) && nrow(editing_summary) > 0) {
 
 ## Differential Editing
 
-```{r editing-scatter, fig.height=6, fig.width=9, fig.cap="Editing frequency in normal vs tumor samples. Each point is an A-to-I editing site. Red = increased editing in tumor; blue = decreased; grey = similar. Points above diagonal = higher editing in tumor."}
+```{r editing-scatter, fig.height=6, fig.width=9, fig.cap="Editing frequency per site across conditions. Each point is an A-to-I editing site. Red = increased editing in treatment; blue = decreased; grey = similar. Points above diagonal = higher editing in treatment."}
 if (!is.null(editing_sites) && nrow(editing_sites) > 0) {
   editing_sites |>
     mutate(col=case_when(
@@ -2009,8 +2127,12 @@ if (!is.null(editing_sites) && nrow(editing_sites) > 0) {
     ggplot(aes(x=EF1, y=EF2, color=col)) +
     geom_point(alpha=0.6, size=1.5) +
     geom_abline(slope=1,intercept=0,linetype="dashed",color="grey50") +
-    scale_color_manual(values=c("#E74C3C","#3498DB","#BDC3C7"), name=NULL) +
-    labs(title="A-to-I editing frequency: normal vs tumor",
+    scale_color_manual(
+      values=setNames(c("#E74C3C","#3498DB","#BDC3C7"),
+                      c(paste0("Increased in ",p$treatment),
+                        paste0("Decreased in ",p$treatment), "Similar")),
+      name=NULL) +
+    labs(title=sprintf("A-to-I editing frequency: %s vs %s", p$control, p$treatment),
          x=sprintf("EF (%s)", p$control),
          y=sprintf("EF (%s)", p$treatment)) +
     theme_minimal(base_size=13)
@@ -2021,11 +2143,14 @@ if (!is.null(editing_sites) && nrow(editing_sites) > 0) {
 ```{r editing-top-genes}
 if (!is.null(editing_per_gene) && nrow(editing_per_gene) > 0) {
   editing_per_gene |>
+    filter(!is.na(gene_name), gene_name != "-1",
+           suppressWarnings(is.na(as.numeric(gene_name)))) |>
     arrange(desc(n_sites)) |>
     head(20) |>
     mutate(across(where(is.numeric), ~round(., 3))) |>
     DT::datatable(
-      caption="Top 20 genes by number of A-to-I editing sites.",
+      caption=sprintf("Top 20 genes by A-to-I editing sites (%s vs %s).",
+                      p$treatment, p$control),
       options=list(pageLength=10, scrollX=TRUE), rownames=FALSE)
 } else cat("Per-gene editing data not available.
 ")
@@ -2054,13 +2179,15 @@ if (!is.null(meta_summary)) {
 
 ## Microbial Composition
 
-```{r meta-barplot, fig.height=6, fig.width=10, fig.cap="Relative abundance of microbial species in unmapped reads per sample (Homo sapiens excluded). With full data, oncogenic viruses (EBV, HPV, HBV) or tumor microbiome signatures may be detected here."}
+```{r meta-barplot, fig.height=6, fig.width=10, fig.cap="Relative abundance of microbial species in unmapped reads per sample (Homo sapiens excluded). With full data, microbial signatures (viruses, bacteria, fungi) may be detected here."}
 if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
-  sample_cols <- coldata$sample_id[coldata$sample_id %in% colnames(meta_abund)]
+  # Use full coldata for metatranscriptomics overview (all conditions)
+  meta_coldata <- if (!is.null(coldata_all)) coldata_all else coldata
+  sample_cols <- meta_coldata$sample_id[meta_coldata$sample_id %in% colnames(meta_abund)]
   rel_df <- meta_abund |>
     tidyr::pivot_longer(all_of(sample_cols),
                         names_to="sample_id", values_to="reads") |>
-    left_join(coldata[,c("sample_id","condition")], by="sample_id") |>
+    left_join(meta_coldata[,c("sample_id","condition")], by="sample_id") |>
     group_by(sample_id, condition) |>
     mutate(rel_abund=reads/sum(reads)*100) |>
     ungroup()
@@ -2089,10 +2216,12 @@ if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
 
 ```{r meta-condition-barplot, fig.height=5, fig.width=8, fig.cap="Mean microbial composition per condition."}
 if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
-  sample_cols_m <- coldata$sample_id[coldata$sample_id %in% colnames(meta_abund)]
+  meta_coldata2 <- if (!is.null(coldata_all)) coldata_all else coldata
+  sample_cols_m <- meta_coldata2$sample_id[meta_coldata2$sample_id %in% colnames(meta_abund)]
+  cond_map_m <- setNames(meta_coldata2$condition, meta_coldata2$sample_id)
   cond_df <- meta_abund |>
     tidyr::pivot_longer(all_of(sample_cols_m), names_to="sample_id", values_to="reads") |>
-    mutate(condition=conditions[sample_id]) |>
+    mutate(condition=cond_map_m[sample_id]) |>
     group_by(name, condition) |>
     summarise(mean_reads=mean(reads), .groups="drop") |>
     group_by(condition) |>
@@ -2113,9 +2242,11 @@ if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
 
 ```{r meta-diversity}
 if (!is.null(meta_diversity)) {
+  meta_coldata3 <- if (!is.null(coldata_all)) coldata_all else coldata
+  cond_map3 <- setNames(meta_coldata3$condition, meta_coldata3$sample_id)
   meta_diversity |>
     mutate(across(where(is.numeric), ~round(.,3)),
-           condition=conditions[sample_id]) |>
+           condition=cond_map3[sample_id]) |>
     select(Sample=sample_id, Condition=condition,
            any_of(c("shannon","richness"))) |>
     knitr::kable(caption="Microbial alpha diversity metrics per sample.") |>
@@ -2273,22 +2404,25 @@ if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
 } else cat("TE insertion cluster data not available.\n")
 ```
 
-```{r te-somatic-plot, fig.height=6, fig.width=10, fig.cap="TE insertion clusters by macrocategory and condition. Points sized by supporting read count. Somatic candidates (tumor-only) highlighted."}
+```{r te-somatic-plot, fig.height=6, fig.width=10}
+#| fig-cap: !expr sprintf("TE insertion clusters by macrocategory. Somatic candidates = treatment-only insertions (%s not in %s).", p$treatment, p$control)
 if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
+  shared_label <- paste0("Shared (", p$control, "+", p$treatment, ")")
+  somatic_label <- paste0("Somatic candidate (", p$treatment, "-only)")
   te_clusters |>
     filter(!is.na(te_macro)) |>
     mutate(
       candidate = ifelse(
         (is.logical(somatic_candidate) & somatic_candidate) |
         (is.character(somatic_candidate) & somatic_candidate == "True"),
-        "Somatic candidate", "Shared/normal"),
+        somatic_label, shared_label),
       size_val  = n_reads_total
     ) |>
     ggplot(aes(x=te_macro, fill=candidate)) +
     geom_bar(position="dodge") +
-    scale_fill_manual(values=c("Somatic candidate"="#E74C3C",
-                                "Shared/normal"="#85C1E9"),
-                      name=NULL) +
+    scale_fill_manual(
+      values=setNames(c("#E74C3C","#85C1E9"), c(somatic_label, shared_label)),
+      name=NULL) +
     labs(title="TE insertion clusters by macrocategory",
          x=NULL, y="Number of clusters") +
     theme_minimal(base_size=12) +
@@ -2310,7 +2444,7 @@ if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
 
 ## Read Processing
 
-Reads trimmed with fastp 0.22.0 (auto adapter detection, Q20, min length 36bp). Genome alignment: STAR 2.7.10b two-pass mode with GENCODE v49 splice site annotation (`--twopassMode Basic`, `--outReadsUnmapped Fastx`). Strandedness inferred per-sample with RSeQC infer_experiment.py. Gene counts: featureCounts (subread 2.0.6), `-t exon -g gene_id -s 2 --fracOverlap 0.1 -p --countReadPairs`. circRNA detection: STAR chimeric alignments (`--chimOutType SeparateSAMold`, `--chimSegmentMin 20`) → CIRI2 v2.0.6. Unmapped reads classified taxonomically with Kraken2 v2.1.3 (k2_minusb database) + Bracken abundance estimation. RNA editing: JACUSA2 v2.1.16 call-2 (`-P RF-FIRSTSTRAND`, `-filterNH 1`). TE somatic insertions: soft-clipped sequences from STAR chimeric SAM aligned to DFAM 3.9 TE consensus with BWA-MEM 0.7.18.
+Reads trimmed with fastp 0.22.0 (auto adapter detection, Q20, min length 36bp). Genome alignment: STAR 2.7.10b two-pass mode with GENCODE v49 splice site annotation (`--twopassMode Basic`, `--outReadsUnmapped Fastx`). Strandedness inferred per-sample with RSeQC infer_experiment.py; library strandedness set in config (`sequencing.strandedness`). Gene counts: featureCounts (subread 2.0.6), `-t exon -g gene_id -s 2 --fracOverlap 0.1 -p --countReadPairs` (strandedness flag set from config, not from RSeQC detection — RSeQC shows borderline FR due to high failed-assignment fraction typical of chromatin-associated RNA). circRNA detection: STAR chimeric alignments (`--chimOutType SeparateSAMold`, `--chimSegmentMin 20`) → CIRI2 v2.0.6. Unmapped reads classified taxonomically with Kraken2 + Bracken v2.1.3 (paired-end mode, species-level re-estimation). RNA editing: JACUSA2 v2.1.16 call-2 (`-filterNH 1`). TE somatic insertions: soft-clipped sequences from STAR chimeric SAM aligned to DFAM 3.9 TE consensus with BWA-MEM 0.7.18.
 
 ## TE Quantification — Pseudochromosome Approach
 
