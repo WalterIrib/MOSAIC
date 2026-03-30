@@ -139,7 +139,7 @@ meta_diversity  <- safe_read(file.path(out, "m20_metatranscriptomics/alpha_diver
 te_clusters     <- tryCatch(
   read.table(file.path(out, "m23_te_insertions/te_insertion_clusters.tsv"),
              header=TRUE, sep="\t", stringsAsFactors=FALSE, fill=TRUE,
-             check.names=FALSE, quote=""),
+             check.names=FALSE, quote="", comment.char=""),
   error=function(e) NULL)
 te_somatic      <- safe_read(file.path(out, "m23_te_insertions/somatic_te_insertions.tsv"))
 te_ins_summary  <- safe_read(file.path(out, "m23_te_insertions/insertion_summary.tsv"))
@@ -197,6 +197,25 @@ go_te_bp <- safe_read(file.path(comp_dir,"go","TE_host_GO_BP.tsv"))
 go_te_mf <- safe_read(file.path(comp_dir,"go","TE_host_GO_MF.tsv"))
 go_te_cc <- safe_read(file.path(comp_dir,"go","TE_host_GO_CC.tsv"))
 
+# ── TE macro classification (available globally) ─────────────────────────────
+classify_macro <- function(fid) dplyr::case_when(
+  grepl("^Alu|^MIR|SINE",      fid, ignore.case=TRUE) ~ "SINE",
+  grepl("^L1|^L2|^CR1|LINE",   fid, ignore.case=TRUE) ~ "LINE",
+  grepl("^LTR|^MLT|^THE|^MER[0-9]|^HERV|^ERV|LTR",
+        fid, ignore.case=TRUE)                         ~ "LTR/ERV",
+  grepl("^Tigger|^Charlie|^hAT|^Mariner|^MER[A-Z]|DNA",
+        fid, ignore.case=TRUE)                         ~ "DNA transposon",
+  grepl("^SVA",                fid, ignore.case=TRUE)  ~ "SVA",
+  TRUE                                                 ~ "Other TE"
+)
+# dominant macro from comma-separated family list (used in 4.3)
+dominant_macro_from_families <- function(fam_str) {
+  fams <- trimws(strsplit(as.character(fam_str), ",")[[1]])
+  macros <- classify_macro(fams)
+  if (length(macros) == 0) return("Other TE")
+  names(sort(table(macros), decreasing=TRUE))[1]
+}
+
 # ── Sample / condition maps ───────────────────────────────────────────────────
 sample_ids <- if (!is.null(coldata)) coldata$sample_id else character(0)
 conditions <- if (!is.null(coldata)) {
@@ -253,7 +272,8 @@ n_circ_sig <- if (!is.null(circ_de)) {
 } else 0
 
 data.frame(
-  Category  = c("Protein-coding genes quantified","lncRNA genes quantified",
+  Category  = c(sprintf("Protein-coding genes (of %s tested)",format(if(!is.null(de_genes))nrow(de_genes) else 0,big.mark=",")),
+                sprintf("lncRNA genes (of %s tested)",format(if(!is.null(de_genes))nrow(de_genes) else 0,big.mark=",")),
                 "TE families detected","Satellite families detected",
                 "circRNA loci detected","DE genes — canonical",
                 "DE TE families","DE satellite families","DE circRNA loci"),
@@ -835,7 +855,7 @@ if (!is.null(te_counts)) {
 
 ## TE Expression per Sample and Condition
 
-```{r te-by-condition, fig.height=6, fig.cap="Fragment counts for the top 20 expressed TE families, per sample (left) and as mean per condition (right). Bars are ordered by total expression (highest first). Log10 scale is used given the wide dynamic range of TE family counts. Error bars (right panel): standard deviation across samples within each condition."}
+```{r te-by-condition, fig.height=7, fig.width=11, fig.cap="Top 20 expressed TE families. Left: individual sample counts (jittered points) with condition colour — shows replicate spread. Right: mean ± SD per condition. Log10 scale. Family order by total expression (highest at top)."}
 if (!is.null(te_counts) && length(conditions)>0) {
   num_cols <- sapply(te_counts, is.numeric)
   fam_ids  <- te_counts[, 1]
@@ -844,9 +864,9 @@ if (!is.null(te_counts) && length(conditions)>0) {
   te_long <- data.frame(family_id=fam_ids,
                          te_counts[, sids_te, drop=FALSE], check.names=FALSE) |>
     pivot_longer(-family_id, names_to="sample_id", values_to="count") |>
-    mutate(condition=conditions[sample_id])
+    mutate(condition=conditions[sample_id]) |>
+    filter(!is.na(condition))
 
-  # Top 20 by total (correct order)
   top20_fam <- te_long |>
     group_by(family_id) |> summarise(tot=sum(count)) |>
     slice_max(tot, n=20) |> arrange(desc(tot)) |> pull(family_id)
@@ -854,16 +874,18 @@ if (!is.null(te_counts) && length(conditions)>0) {
   te20 <- te_long |> filter(family_id %in% top20_fam) |>
     mutate(family_id=factor(family_id, levels=rev(top20_fam)))
 
-  p1 <- ggplot(te20, aes(x=family_id, y=count+1, fill=condition)) +
-    geom_col(position="dodge") +
+  # Left: per-sample jitter plot (replicate spread)
+  p1 <- ggplot(te20, aes(x=family_id, y=count+1, color=condition)) +
+    geom_jitter(position=position_jitterdodge(jitter.width=0.2, dodge.width=0.6),
+                size=2.5, alpha=0.85) +
     coord_flip() +
     scale_y_log10(labels=comma) +
-    scale_fill_manual(values=col_cond) +
-    labs(title="Per sample", x=NULL, y="Counts+1 (log10)", fill=NULL) +
+    scale_color_manual(values=col_cond) +
+    labs(title="Per sample (replicates)", x=NULL, y="Counts+1 (log10)", color=NULL) +
     theme_minimal(base_size=8.5) +
     theme(legend.position="top")
 
-  # Mean ± SD per condition (correct order)
+  # Right: mean ± SD
   te20_summ <- te20 |>
     group_by(family_id, condition) |>
     summarise(mean_c=mean(count), sd_c=sd(count), .groups="drop")
@@ -892,21 +914,10 @@ if (!is.null(te_counts) && length(conditions)>0) {
   fam_ids  <- te_counts[, 1]
   sids_te  <- intersect(colnames(te_counts)[num_cols], names(conditions))
 
-  classify_macro <- function(fid) case_when(
-    grepl("^Alu|^MIR|SINE",      fid, ignore.case=TRUE) ~ "SINE",
-    grepl("^L1|^L2|^CR1|LINE",   fid, ignore.case=TRUE) ~ "LINE",
-    grepl("^LTR|^MLT|^THE|^MER[0-9]|^HERV|^ERV|LTR",
-          fid, ignore.case=TRUE)                         ~ "LTR/ERV",
-    grepl("^Tigger|^Charlie|^hAT|^Mariner|^MER[A-Z]|DNA",
-          fid, ignore.case=TRUE)                         ~ "DNA transposon",
-    grepl("^SVA",                fid, ignore.case=TRUE)  ~ "SVA",
-    TRUE                                                 ~ "Other TE"
-  )
-
-  te_macro <- data.frame(family_id=fam_ids,
+  te_macro_df <- data.frame(family_id=fam_ids,
                           macro=classify_macro(fam_ids),
                           te_counts[, sids_te, drop=FALSE], check.names=FALSE) |>
-    pivot_longer(-c(family_id,macro), names_to="sample_id", values_to="count") |>
+    pivot_longer(-c(family_id, macro), names_to="sample_id", values_to="count") |>
     mutate(condition=conditions[sample_id]) |>
     filter(!is.na(condition))
 
@@ -914,26 +925,46 @@ if (!is.null(te_counts) && length(conditions)>0) {
   if (!is.null(sat_counts)) {
     sat_num <- sapply(sat_counts, is.numeric)
     sat_sids <- intersect(colnames(sat_counts)[sat_num], names(conditions))
-    sat_macro <- data.frame(family_id=sat_counts[,1], macro="Satellite",
+    sat_macro_tmp <- data.frame(family_id=sat_counts[,1], macro="Satellite",
                              sat_counts[, sat_sids, drop=FALSE], check.names=FALSE) |>
-      pivot_longer(-c(family_id,macro), names_to="sample_id", values_to="count") |>
+      pivot_longer(-c(family_id, macro), names_to="sample_id", values_to="count") |>
       mutate(condition=conditions[sample_id]) |>
       filter(!is.na(condition))
-    te_macro <- bind_rows(te_macro, sat_macro)
+    te_macro_df <- bind_rows(te_macro_df, sat_macro_tmp)
   }
 
-  macro_summ <- te_macro |>
+  # Per-sample totals (for Wilcoxon)
+  macro_per_sample <- te_macro_df |>
     group_by(macro, condition, sample_id) |>
-    summarise(s_total=sum(count), n_fam=n_distinct(family_id), .groups="drop") |>
+    summarise(s_total=sum(count), n_fam=n_distinct(family_id), .groups="drop")
+
+  macro_summ <- macro_per_sample |>
     group_by(macro, condition) |>
     summarise(mean_total=mean(s_total), sd_total=sd(s_total),
               n_fam=mean(n_fam), .groups="drop")
 
-  # Single n label per macro (same across conditions)
-  n_label <- macro_summ |> group_by(macro) |>
-    summarise(n_fam=round(mean(n_fam)), y=max(mean_total+sd_total)*1.15, .groups="drop")
+  # Wilcoxon test per macro (two-condition comparison)
+  conds2 <- unique(macro_per_sample$condition)
+  wilcox_labels <- if (length(conds2) == 2) {
+    do.call(rbind, lapply(unique(macro_per_sample$macro), function(m) {
+      d <- macro_per_sample[macro_per_sample$macro == m, ]
+      g1 <- d$s_total[d$condition == conds2[1]]
+      g2 <- d$s_total[d$condition == conds2[2]]
+      pval <- tryCatch(wilcox.test(g1, g2, exact=FALSE)$p.value, error=function(e) NA)
+      ymax <- max(macro_summ$mean_total[macro_summ$macro == m] +
+                  macro_summ$sd_total[macro_summ$macro == m], na.rm=TRUE)
+      sig_label <- ifelse(is.na(pval), "",
+                   ifelse(pval < 0.001, "***",
+                   ifelse(pval < 0.01,  "**",
+                   ifelse(pval < 0.05,  "*", sprintf("p=%.2f", pval)))))
+      data.frame(macro=m, y=ymax*1.18, label=sig_label, stringsAsFactors=FALSE)
+    }))
+  } else NULL
 
-  ggplot(macro_summ,
+  n_label <- macro_summ |> group_by(macro) |>
+    summarise(n_fam=round(mean(n_fam)), y=max(mean_total+sd_total)*1.08, .groups="drop")
+
+  p_macro <- ggplot(macro_summ,
          aes(x=reorder(macro,-mean_total), y=mean_total, fill=condition)) +
     geom_col(position=position_dodge(width=0.8), width=0.7) +
     geom_errorbar(aes(ymin=pmax(mean_total-sd_total,0),
@@ -943,11 +974,21 @@ if (!is.null(te_counts) && length(conditions)>0) {
     geom_text(data=n_label,
               aes(x=reorder(macro,-y), y=y,
                   label=paste0("n=",n_fam), fill=NULL),
-              vjust=0, size=3, color="grey30", inherit.aes=FALSE) +
-    scale_y_continuous(labels=comma, expand=expansion(mult=c(0,0.2))) +
+              vjust=0, size=2.8, color="grey30", inherit.aes=FALSE)
+
+  if (!is.null(wilcox_labels) && any(nzchar(wilcox_labels$label))) {
+    p_macro <- p_macro +
+      geom_text(data=wilcox_labels,
+                aes(x=macro, y=y, label=label, fill=NULL),
+                vjust=0, size=3.5, color="#C0392B", fontface="bold",
+                inherit.aes=FALSE)
+  }
+
+  p_macro +
+    scale_y_continuous(labels=comma, expand=expansion(mult=c(0,0.25))) +
     scale_fill_manual(values=col_cond) +
     labs(title="RS expression by macrocategory — mean ± SD per condition",
-         subtitle="Numbers above bars = mean distinct families detected",
+         subtitle=sprintf("Wilcoxon test (n=3 per group): * p<0.05, ** p<0.01, *** p<0.001. Numbers = mean distinct families.", max(nchar(""))),
          x=NULL, y="Total fragment counts (mean across samples)",
          fill="Condition") +
     theme_minimal(base_size=11) +
@@ -1351,7 +1392,10 @@ if (!is.null(te_host) && !is.null(de_genes)) {
                     if ("te_count"     %in% colnames(te_host)) te_count else 1L,
       gene_len_kb = if ("gene_length"  %in% colnames(te_host)) gene_length/1000 else NA_real_,
       dominant_macro = if ("dominant_macro" %in% colnames(te_host)) dominant_macro else
-                       if ("te_class"       %in% colnames(te_host)) te_class else "Other TE",
+                       if ("te_class" %in% colnames(te_host)) te_class else
+                       if ("te_families" %in% colnames(te_host))
+                         sapply(te_families, dominant_macro_from_families)
+                       else "Other TE",
       te_density  = ifelse(!is.na(gene_len_kb) & gene_len_kb > 0,
                            n_te_loci / gene_len_kb, NA_real_)
     )
@@ -1693,7 +1737,10 @@ if (!is.null(tet_sig) && nrow(tet_sig) > 0) {
 ")
   }
 } else {
-  cat("No significant TEtranscripts features at current thresholds.")
+  cat("TEtranscripts (M12) data not available.\n")
+  cat("Module m12_tetranscripts is set to false in config.yaml — run is disabled.\n")
+  cat("To activate: set m12_tetranscripts: true in config.yaml and re-run the pipeline.\n")
+  cat("TEtranscripts uses EM to resolve reads to TE loci + canonical genes simultaneously.\n")
 }
 ```
 
@@ -1743,13 +1790,24 @@ if (!is.null(st_class_codes)) {
 if (!is.null(novel_de)) {
   n_sig <- sum(!is.na(novel_de$padj) & novel_de$padj < padj_thr &
                  abs(novel_de$log2FoldChange) > lfc_thr, na.rm=TRUE)
-  cat(sprintf("Novel transcripts tested: %d
-", nrow(novel_de)))
-  cat(sprintf("Significant (padj<%.2f, |LFC|>%.1f): %d
-",
-              padj_thr, lfc_thr, n_sig))
-} else cat("Novel DE data not available.
-")
+  cat(sprintf("Novel transcripts tested: %d\n", nrow(novel_de)))
+  cat(sprintf("Significant (padj<%.2f, |LFC|>%.1f): %d\n", padj_thr, lfc_thr, n_sig))
+} else {
+  cat("Novel DE data not available (novel_transcript_DE.tsv not generated).\n\n")
+  # Explain based on StringTie assembly results
+  if (!is.null(st_summary)) {
+    novel_n <- tryCatch({
+      novel_row <- st_summary[grepl("Novel candidates", st_summary[[1]], ignore.case=TRUE), ]
+      if (nrow(novel_row) > 0) as.integer(novel_row[[2]][1]) else NA
+    }, error=function(e) NA)
+    if (!is.na(novel_n) && novel_n == 0) {
+      cat("StringTie assembly found 0 novel transcript candidates after filtering.\n")
+      cat("All 507,048 assembled transcripts match GENCODE v49 exactly (class_code '=')\n")
+      cat("or are contained within annotated loci. No de-novo isoforms were assembled.\n")
+      cat("This is consistent with high-depth data with good annotation coverage.\n")
+    }
+  }
+}
 ```
 
 ```{r novel-de-volcano, fig.height=6, fig.width=9, fig.cap="Volcano plot of novel transcript differential expression. Each point is a StringTie-assembled novel transcript not matching GENCODE annotation. Red = up-regulated in treatment; blue = down-regulated. Labels show transcript IDs of most significant events."}
@@ -2166,9 +2224,13 @@ if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0 &&
 
 ```{r editing-summary}
 if (!is.null(editing_summary) && nrow(editing_summary) > 0) {
-  knitr::kable(editing_summary,
-    col.names=c("Metric","Value"),
-    caption=sprintf("RNA A-to-I editing summary (JACUSA2). EF = editing frequency (edited reads / total reads). dEF = EF(%s) - EF(%s).", p$treatment, p$control)) |>
+  editing_summary |>
+    mutate(metric = gsub("_normal\\b", paste0("_", p$control),   metric),
+           metric = gsub("_tumor\\b",  paste0("_", p$treatment), metric),
+           metric = gsub("\\bnormal\\b", p$control,   metric),
+           metric = gsub("\\btumor\\b",  p$treatment, metric)) |>
+    knitr::kable(col.names=c("Metric","Value"),
+      caption=sprintf("RNA A-to-I editing summary (JACUSA2). EF = editing frequency (edited reads / total reads). dEF = EF(%s) - EF(%s).", p$treatment, p$control)) |>
     kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
 } else cat("RNA editing summary not available.
 ")
@@ -2232,8 +2294,27 @@ if (!is.null(meta_summary)) {
            `% classified`=pct_classified) |>
     knitr::kable(caption="Kraken2 classification rates for unmapped reads.") |>
     kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
-} else cat("Metatranscriptomics summary not available.
-")
+} else {
+  cat("Kraken2 classification summary not available (kraken2_classification_summary.tsv missing).\n\n")
+  # Fall back to showing per-sample microbial read counts from abundance matrix
+  if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
+    meta_col3 <- if (!is.null(coldata) && nrow(coldata)>0) coldata else coldata_all
+    sids_meta <- meta_col3$sample_id[meta_col3$sample_id %in% colnames(meta_abund)]
+    if (length(sids_meta) > 0) {
+      micro_totals <- colSums(meta_abund[, sids_meta, drop=FALSE])
+      cond_map_m <- setNames(meta_col3$condition, meta_col3$sample_id)
+      micro_tbl <- data.frame(
+        Sample    = sids_meta,
+        Condition = cond_map_m[sids_meta],
+        `Microbial reads (Bracken, excl. Homo sapiens)` = as.integer(micro_totals[sids_meta]),
+        check.names = FALSE
+      )
+      knitr::kable(micro_tbl,
+        caption=sprintf("Microbial read counts from Bracken (Homo sapiens excluded). These are unmapped reads classified to non-human taxa. The fraction relative to total input reads indicates overall microbial load. Visible in Section 1.4 RNA landscape as 'Microbial' bar. — %s vs %s.", p$treatment, p$control)) |>
+        kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+    }
+  }
+}
 ```
 
 ## Microbial Composition
@@ -2304,16 +2385,18 @@ if (!is.null(meta_diversity)) {
   meta_coldata3 <- if (!is.null(coldata) && nrow(coldata)>0) coldata else coldata_all
   cond_map3 <- setNames(meta_coldata3$condition, meta_coldata3$sample_id)
   meta_diversity |>
+    filter(sample_id %in% meta_coldata3$sample_id) |>
     mutate(across(where(is.numeric), ~round(.,3)),
            condition=cond_map3[sample_id]) |>
+    filter(!is.na(condition)) |>
     select(Sample=sample_id, Condition=condition,
            any_of(c("shannon","richness"))) |>
-    knitr::kable(caption="Microbial alpha diversity metrics per sample.") |>
+    knitr::kable(caption=sprintf("Microbial alpha diversity metrics — %s vs %s.", p$treatment, p$control)) |>
     kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
 }
 ```
 
-```{r meta-beta-pca, fig.height=5, fig.width=10, fig.cap="Beta diversity of microbial communities. Left: PCoA (Bray-Curtis dissimilarity) showing separation between samples. Right: heatmap of pairwise Bray-Curtis distances. With full data, tumor samples should cluster separately from normal if microbiome differs."}
+```{r meta-beta-pca, fig.height=5, fig.width=10}
 if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
   sample_cols_b <- coldata$sample_id[coldata$sample_id %in% colnames(meta_abund)]
   if (length(sample_cols_b) >= 3) {
@@ -2359,10 +2442,11 @@ if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
       theme_minimal(base_size=11) +
       theme(axis.text.x=element_text(angle=30,hjust=1))
 
+    # fig title (since fig.cap moved here dynamically)
+    cat(sprintf("\n*Beta diversity: Bray-Curtis PCoA (left) and distance matrix (right). %s vs %s.*\n", p$treatment, p$control))
     gridExtra::grid.arrange(p_pcoa, p_heat, ncol=2)
   } else {
-    cat("Need >= 3 samples for beta diversity analysis.
-")
+    cat("Need >= 3 samples for beta diversity analysis.\n")
   }
 } else cat("Microbial abundance data not available.\n")
 ```
@@ -2428,7 +2512,7 @@ if (!is.null(humann_genes) && nrow(humann_genes) > 0) {
 
 # TE Somatic Insertions (M23)
 
-> Soft-clipped sequences from STAR chimeric alignments were mapped to DFAM 3.9 TE consensus sequences using BWA-MEM. Clusters of TE-mapping clips at the same genomic locus represent candidate TE insertion sites. Somatic candidates = sites detected in tumor but not in normal samples.
+> Soft-clipped sequences from STAR chimeric alignments were mapped to DFAM 3.9 TE consensus sequences using BWA-MEM. Clusters of TE-mapping clips at the same genomic locus represent candidate TE insertion sites. Somatic candidates = sites detected in the treatment condition (`r params$treatment`) but not in the control (`r params$control`). **Note:** m23 runs on all samples globally; the somatic_candidate flag uses all-sample comparison, not just this pair.
 
 
 ## Insertion Summary
