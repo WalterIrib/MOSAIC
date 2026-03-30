@@ -1122,6 +1122,26 @@ class ModuleRunner:
 
     def _run_m14_report(self, comparison: str = None) -> bool:
         cfg  = self.cfg
+
+        # Interaction comparison → use dedicated interaction report QMD
+        if self._is_interaction_comparison(comparison):
+            out_dir = self._comparison_dir(comparison) / "report"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            interaction_qmd = self.scripts / "m14_interaction_report.qmd"
+            if not interaction_qmd.exists():
+                warn(f"[SKIP] {interaction_qmd} not found — skipping interaction report")
+                return False
+            thresholds = cfg.thresholds
+            ret = run_cmd([
+                "quarto", "render",
+                str(interaction_qmd),
+                "-P", f"out_dir:{self.out}",
+                "-P", f"padj_threshold:{thresholds.padj}",
+                "-P", f"lfc_threshold:{thresholds.lfc}",
+                "--output-dir", str(out_dir),
+            ], log_file=self._log("m14_report", comparison))
+            return ret == 0
+
         comp = self._parse_comparison(comparison)
         if not comp:
             return False
