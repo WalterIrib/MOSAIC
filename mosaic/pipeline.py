@@ -1518,22 +1518,39 @@ class ModuleRunner:
                 continue
             sid_out = out_dir / sid
             sid_out.mkdir(exist_ok=True)
-            # Kraken2
-            run_cmd([
+            # Kraken2 — STAR unmapped files are plain FASTQ (not gzip)
+            k2_report = sid_out / f"{sid}_kraken2_report.txt"
+            unmapped_r2 = bam_dir / sid / f"{sid}_Unmapped.out.mate2"
+            k2_cmd = [
                 "kraken2",
-                "--db",       str(Path(cfg.databases.kraken2_db)),
-                "--threads",  str(cfg.threads),
-                "--report",   str(sid_out / f"{sid}_kraken2_report.txt"),
-                "--output",   str(sid_out / f"{sid}_kraken2_output.txt"),
-                "--gzip-compressed",
-                str(unmapped_r1),
-            ], log_file=self._log("m20_kraken2", sid))
+                "--db",      str(Path(cfg.databases.kraken2_db)),
+                "--threads", str(cfg.threads),
+                "--report",  str(k2_report),
+                "--output",  str(sid_out / f"{sid}_kraken2_output.txt"),
+            ]
+            if unmapped_r2.exists():
+                k2_cmd += ["--paired", str(unmapped_r1), str(unmapped_r2)]
+            else:
+                k2_cmd.append(str(unmapped_r1))
+            run_cmd(k2_cmd, log_file=self._log("m20_kraken2", sid))
+            # Bracken abundance re-estimation at species level
+            read_len = getattr(cfg.library, "read_length", 150)
+            bracken_out = sid_out / f"{sid}_bracken_species.txt"
+            run_cmd([
+                "bracken",
+                "-d",  str(Path(cfg.databases.kraken2_db)),
+                "-i",  str(k2_report),
+                "-o",  str(bracken_out),
+                "-r",  str(read_len),
+                "-l",  "S",
+                "-t",  str(cfg.thresholds.min_reads_meta),
+            ], log_file=self._log("m20_bracken", sid))
 
-        # R summary + diversity
+        # R summary + diversity — use full coldata (all samples, not comparison-specific)
         return run_r_script(self.scripts / "m20_metatranscriptomics.R", [
             "--meta-dir",  str(out_dir),
             "--outdir",    str(out_dir),
-            "--coldata",   str(self._write_coldata(comparison)),
+            "--coldata",   str(Path(cfg.samples.coldata)),
             "--min-reads", str(cfg.thresholds.min_reads_meta),
         ], log_file=self._log("m20_meta")) == 0
 

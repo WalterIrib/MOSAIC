@@ -62,7 +62,7 @@ if (is.null(coldata)) { cat("[ERROR] --coldata required\n"); quit(status=1) }
 # ── 1. Load Bracken species tables ────────────────────────────────────────────
 bracken_files <- list.files(opt[["meta-dir"]],
                              pattern="_bracken_species\\.txt$",
-                             full.names=TRUE)
+                             full.names=TRUE, recursive=TRUE)
 
 if (length(bracken_files) == 0) {
   cat("[ERROR] No Bracken files found in", opt[["meta-dir"]], "\n")

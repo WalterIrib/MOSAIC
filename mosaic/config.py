@@ -93,6 +93,7 @@ class ProjectConfig:
 class LibraryConfig:
     prep: str = "rRNA_depletion"
     layout: str = "PE"                  # PE|SE
+    read_length: int = 150
 
     def validate(self) -> None:
         if self.prep.lower() != "rrna_depletion":
@@ -659,6 +660,8 @@ def load_config(path: str | Path) -> MosaicConfig:
         library.layout = seq_raw["type"]
     if seq_raw.get("strandedness"):
         library._strandedness_config = seq_raw["strandedness"]
+    if seq_raw.get("read_length"):
+        library.read_length = int(seq_raw["read_length"])
 
     cfg = MosaicConfig(
         project=project,
