@@ -1146,6 +1146,7 @@ class ModuleRunner:
             "-P", f"control:{control}",
             "-P", f"padj_threshold:{thresholds.padj}",
             "-P", f"lfc_threshold:{thresholds.lfc}",
+            "-P", f"coldata_path:{cfg.samples.coldata}",
             "--output-dir", str(out_dir),
         ], log_file=self._log("m14_report", comparison))
         return ret == 0

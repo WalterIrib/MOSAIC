@@ -39,6 +39,7 @@ params:
   control:        "normal"
   lfc_threshold:  1.0
   padj_threshold: 0.05
+  coldata_path:   ""
 ---
 
 ```{r setup}
@@ -107,7 +108,7 @@ col_macro <- c(
 te_counts   <- safe_read(file.path(out,"integrated","te_counts_clean.tsv"))
 sat_counts  <- safe_read(file.path(out,"integrated","satellite_counts_clean.tsv"))
 gene_map    <- safe_read(file.path(out,"integrated","gene_type_map.tsv"))
-coldata     <- safe_read("/tmp/coldata.tsv")
+coldata     <- safe_read(if (nzchar(params$coldata_path)) params$coldata_path else "/tmp/coldata.tsv")
 circ_annot  <- safe_read(file.path(out,"circrna_merged","circrna_annotation.tsv"))
 circ_counts <- safe_read(file.path(out,"circrna_merged","circrna_counts.tsv"))
 circ_de     <- safe_read(file.path(out,"circrna_merged","circrna_DE_wilcoxon.tsv"))
