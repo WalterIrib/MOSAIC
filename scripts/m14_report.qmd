@@ -147,7 +147,8 @@ humann_paths    <- safe_read(file.path(out, "m20_metatranscriptomics/humann3/all
                               comment.char="#")
 humann_genes    <- safe_read(file.path(out, "m20_metatranscriptomics/humann3/all_genefamilies.tsv"),
                               comment.char="#")
-fusion_merged   <- safe_read(file.path(out, "m15_fusions/fusions_merged.tsv"))
+fusion_merged   <- safe_read(file.path(out, "m15_fusions/fusions_merged.tsv"),
+                              quote="", fill=TRUE)
 
 # Comparison-specific (in comparison_{comp}/ subdir)
 norm_counts <- safe_read(file.path(comp_dir,"deseq2","normalized_counts.tsv"),
@@ -231,8 +232,18 @@ sat_sig <- if (!is.null(sat_de)) {
 # Executive Summary {.unnumbered}
 
 ```{r summary-box}
-n_pc  <- if (!is.null(gene_map)) sum(gene_map$gene_type=="protein_coding") else "N/A"
-n_lnc <- if (!is.null(gene_map)) sum(gene_map$gene_type=="lncRNA") else "N/A"
+# Count from DE genes actually tested (not from full annotation)
+if (!is.null(de_genes) && !is.null(gene_map)) {
+  gid_col_s <- if ("gene_id" %in% colnames(de_genes)) "gene_id" else colnames(de_genes)[ncol(de_genes)]
+  tested_types <- gene_map$gene_type[match(de_genes[[gid_col_s]], gene_map$gene_id)]
+  n_pc  <- sum(tested_types == "protein_coding", na.rm=TRUE)
+  n_lnc <- sum(tested_types == "lncRNA", na.rm=TRUE)
+} else if (!is.null(gene_map)) {
+  n_pc  <- sum(gene_map$gene_type=="protein_coding")
+  n_lnc <- sum(gene_map$gene_type=="lncRNA")
+} else {
+  n_pc  <- "N/A"; n_lnc <- "N/A"
+}
 n_te  <- if (!is.null(te_counts))  nrow(te_counts)  else "N/A"
 n_sat <- if (!is.null(sat_counts)) nrow(sat_counts) else "N/A"
 n_circ<- if (!is.null(circ_counts)) nrow(circ_counts) else 0
@@ -290,14 +301,21 @@ if (!is.null(strand_df)) {
   # Filter to comparison samples
   sids_comp <- if (!is.null(coldata)) coldata$sample_id else character(0)
   sd <- if (length(sids_comp) > 0) strand_df[strand_df$sample_id %in% sids_comp, ] else strand_df
-  kable(sd,
+  # Add config strandedness column for clarity
+  cfg_strand <- "FR (2-strand, from config)"
+  sd_show <- sd |>
+    mutate(strand_config = cfg_strand) |>
+    select(any_of(c("sample_id","n_input_reads","pct_uniquely_mapped",
+                    "pct_multimapped","frac_fr","frac_rf","frac_failed",
+                    "strandedness","strand_config")))
+  kable(sd_show,
         caption=paste0(
-          "Per-sample STAR mapping rates and strandedness inference (RSeQC infer_experiment.py). ",
-          "Note: RSeQC classifies as 'unstranded' when frac_fr < 0.80; this dataset shows ",
-          "frac_fr ~0.55-0.68 (borderline FR, high failed-assignment fraction typical of ",
-          "chromatin-associated RNA). featureCounts was run with strandedness from config ",
-          "(sequencing.strandedness in config.yaml); strand_fc=0 is the RSeQC detection, ",
-          "not what featureCounts used.")) |>
+          "STAR mapping rates and strandedness per sample. ",
+          "**strandedness** = RSeQC detection (classifies as 'unstranded' when frac_fr < 0.80; ",
+          "frac_fr ~0.55-0.68 here because chromatin-associated RNA has high failed-assignment fraction ",
+          "— reads spanning splice sites in both orientations). ",
+          "**strand_config** = strandedness actually used by featureCounts (from sequencing.strandedness in config.yaml). ",
+          "These two values intentionally differ: RSeQC detection is informative but not used for quantification.")) |>
     kable_styling(bootstrap_options=c("striped","hover","condensed"))
 }
 ```
@@ -418,7 +436,7 @@ if (!is.null(norm_counts) && !is.null(gene_map) && length(conditions)>0) {
       if (length(sc)>0) rs_vec[sc] <- rs_vec[sc] + colSums(d[,sc,drop=FALSE])
     }
   }
-  rs_agg <- data.frame(category="RS (TE+Satellite)", as.data.frame(t(rs_vec)))
+  rs_agg <- data.frame(category="RS (TE+Satellite)", as.data.frame(t(rs_vec)), check.names=FALSE)
 
   # Microbial reads from M20 (Kraken2 classified, non-human)
   # Use meta_summary: total classified reads minus Homo sapiens
@@ -436,7 +454,7 @@ if (!is.null(norm_counts) && !is.null(gene_map) && length(conditions)>0) {
     }
     if (sum(micro_vec) > 0)
       micro_agg <- data.frame(category="Microbial",
-                               as.data.frame(t(micro_vec)))
+                               as.data.frame(t(micro_vec)), check.names=FALSE)
   }
 
   circ_agg <- NULL
@@ -444,7 +462,7 @@ if (!is.null(norm_counts) && !is.null(gene_map) && length(conditions)>0) {
     nc <- sapply(circ_counts,is.numeric); sc <- intersect(colnames(circ_counts)[nc],sids)
     if (length(sc)>0)
       circ_agg <- data.frame(category="circRNA",
-                              as.data.frame(t(colSums(circ_counts[,sc,drop=FALSE]))))
+                              as.data.frame(t(colSums(circ_counts[,sc,drop=FALSE]))), check.names=FALSE)
   }
 
   pct_agg <- make_pct_summ(c(
@@ -464,7 +482,7 @@ if (!is.null(norm_counts) && !is.null(gene_map) && length(conditions)>0) {
     gs <- intersect(names(cat_map_vec)[cat_map_vec==cat_nm], rownames(norm_counts))
     if (length(gs)>0) {
       tv <- colSums(norm_counts[gs, sids, drop=FALSE])
-      detail_rows[[cat_nm]] <- data.frame(category=cat_nm, as.data.frame(t(tv)))
+      detail_rows[[cat_nm]] <- data.frame(category=cat_nm, as.data.frame(t(tv)), check.names=FALSE)
     }
   }
   if (!is.null(te_counts)) {
@@ -474,7 +492,7 @@ if (!is.null(norm_counts) && !is.null(gene_map) && length(conditions)>0) {
       sel <- classify_macro(fids)==mac
       if (any(sel)&&length(sc)>0) {
         tv <- colSums(te_counts[sel,sc,drop=FALSE])
-        detail_rows[[mac]] <- data.frame(category=mac, as.data.frame(t(tv)))
+        detail_rows[[mac]] <- data.frame(category=mac, as.data.frame(t(tv)), check.names=FALSE)
       }
     }
   }
@@ -482,14 +500,14 @@ if (!is.null(norm_counts) && !is.null(gene_map) && length(conditions)>0) {
     nc <- sapply(sat_counts,is.numeric); sc <- intersect(colnames(sat_counts)[nc],sids)
     if (length(sc)>0) {
       tv <- colSums(sat_counts[,sc,drop=FALSE])
-      detail_rows[["Satellite"]] <- data.frame(category="Satellite", as.data.frame(t(tv)))
+      detail_rows[["Satellite"]] <- data.frame(category="Satellite", as.data.frame(t(tv)), check.names=FALSE)
     }
   }
   if (!is.null(circ_counts)) {
     nc <- sapply(circ_counts,is.numeric); sc <- intersect(colnames(circ_counts)[nc],sids)
     if (length(sc)>0) {
       tv <- colSums(circ_counts[,sc,drop=FALSE])
-      detail_rows[["circRNA"]] <- data.frame(category="circRNA", as.data.frame(t(tv)))
+      detail_rows[["circRNA"]] <- data.frame(category="circRNA", as.data.frame(t(tv)), check.names=FALSE)
     }
   }
   pct_det <- make_pct_summ(detail_rows)
@@ -759,7 +777,7 @@ if (!is.null(te_counts)) {
 
   if (length(conditions)>0) {
     sids_te <- intersect(colnames(te_mat), names(conditions))
-    te_long <- data.frame(family_id=fam_ids, te_counts[, sids_te, drop=FALSE]) |>
+    te_long <- data.frame(family_id=fam_ids, te_counts[, sids_te, drop=FALSE], check.names=FALSE) |>
       pivot_longer(-family_id, names_to="sample_id", values_to="count") |>
       mutate(condition=conditions[sample_id]) |>
       filter(family_id %in% top30$family_id)
@@ -790,11 +808,13 @@ if (!is.null(te_counts)) {
   num_cols <- sapply(te_counts, is.numeric)
   te_mat   <- as.matrix(te_counts[, num_cols, drop=FALSE])
   fam_ids  <- te_counts[, 1]
-  sids_te  <- colnames(te_mat)
+  # Filter table to comparison samples only
+  sids_te  <- if (length(conditions)>0) intersect(colnames(te_mat), names(conditions)) else colnames(te_mat)
+  te_mat_tbl <- te_mat[, sids_te, drop=FALSE]
 
   tbl <- data.frame(family_id=fam_ids,
-                    as.data.frame(te_mat),
-                    total=rowSums(te_mat)) |>
+                    as.data.frame(te_mat_tbl),
+                    total=rowSums(te_mat_tbl), check.names=FALSE) |>
     arrange(desc(total))
 
   rows_html <- apply(tbl, 1, function(r) {
@@ -822,7 +842,7 @@ if (!is.null(te_counts) && length(conditions)>0) {
   sids_te  <- intersect(colnames(te_counts)[num_cols], names(conditions))
 
   te_long <- data.frame(family_id=fam_ids,
-                         te_counts[, sids_te, drop=FALSE]) |>
+                         te_counts[, sids_te, drop=FALSE], check.names=FALSE) |>
     pivot_longer(-family_id, names_to="sample_id", values_to="count") |>
     mutate(condition=conditions[sample_id])
 
@@ -885,7 +905,7 @@ if (!is.null(te_counts) && length(conditions)>0) {
 
   te_macro <- data.frame(family_id=fam_ids,
                           macro=classify_macro(fam_ids),
-                          te_counts[, sids_te, drop=FALSE]) |>
+                          te_counts[, sids_te, drop=FALSE], check.names=FALSE) |>
     pivot_longer(-c(family_id,macro), names_to="sample_id", values_to="count") |>
     mutate(condition=conditions[sample_id]) |>
     filter(!is.na(condition))
@@ -895,7 +915,7 @@ if (!is.null(te_counts) && length(conditions)>0) {
     sat_num <- sapply(sat_counts, is.numeric)
     sat_sids <- intersect(colnames(sat_counts)[sat_num], names(conditions))
     sat_macro <- data.frame(family_id=sat_counts[,1], macro="Satellite",
-                             sat_counts[, sat_sids, drop=FALSE]) |>
+                             sat_counts[, sat_sids, drop=FALSE], check.names=FALSE) |>
       pivot_longer(-c(family_id,macro), names_to="sample_id", values_to="count") |>
       mutate(condition=conditions[sample_id]) |>
       filter(!is.na(condition))
@@ -1024,7 +1044,7 @@ if (!is.null(sat_counts) && !is.null(coldata) && nrow(coldata) > 0) {
   sids_sat     <- intersect(colnames(sat_counts)[num_cols_sat], coldata$sample_id)
   if (length(sids_sat) > 0) {
     sat_long <- data.frame(family_id=fam_ids_sat,
-                            sat_counts[, sids_sat, drop=FALSE]) |>
+                            sat_counts[, sids_sat, drop=FALSE], check.names=FALSE) |>
       pivot_longer(-family_id, names_to="sample_id", values_to="count") |>
       mutate(condition=conditions[sample_id]) |>
       filter(!is.na(condition))
@@ -1099,8 +1119,9 @@ if (!is.null(te_age_summary)) {
          x=NULL, y="Mean divergence from consensus (%)") +
     theme_minimal(base_size=12)
 } else {
-  cat("TE age data not available — run M11c first.
-")
+  cat("TE age landscape data not available (te_age_summary.tsv from M11c).\n")
+  cat("M11c annotates RepeatMasker loci with substitution divergence (proxy for insertion age).\n")
+  cat("Re-run M11c to generate this plot.\n")
 }
 ```
 
@@ -1126,8 +1147,9 @@ if (!is.null(te_age_de_tbl) && nrow(te_age_de_tbl) >= 5) {
          color="TE class") +
     theme_minimal(base_size=12)
 } else {
-  cat("TE age vs DE data not available or insufficient families.
-")
+  cat("TE age vs DE data not available (te_age_de_table.tsv from M11c).\n")
+  cat("This file is generated when M11c successfully annotates TE families with age metrics\n")
+  cat("and merges them with the DE results. Re-run M11c to generate this analysis.\n")
 }
 ```
 
@@ -1267,6 +1289,24 @@ go_bar(go_all_do,
 
 > TE host genes: genes whose annotated body overlaps ≥1 RepeatMasker hg38 TE locus (bedtools intersect ≥10% overlap; M11). The GO background universe is restricted to these 51,934 host genes, making the enrichment specific to the TE-hosting gene context.
 
+```{r go-te-note}
+# Explain if GO results are missing due to m11b empty output
+if (is.null(go_te_bp) || nrow(go_te_bp) == 0 ||
+    all(is.na(go_te_bp$p.adjust))) {
+  cat(paste0(
+    "\u26a0\ufe0f **TE Host GO enrichment: all p.adjust values are NA or no results.**\n\n",
+    "This is caused by M11b (promoter TE annotation) not producing output files. ",
+    "M11b runs but completes in ~0 seconds without writing any output — ",
+    "likely a silent failure in the bedtools promoter-window intersection step. ",
+    "As a consequence, the TE host gene universe used for GO enrichment is empty ",
+    "or undefined, and clusterProfiler cannot compute adjusted p-values.\n\n",
+    "The TE host genes file from M11 (te_host_genes.tsv) is available and used in ",
+    "section 4.3 (Genomic Distribution). The GO enrichment below may show no bars.\n\n",
+    "**Action required:** re-run M11b to generate te_promoter_genes.tsv."
+  ))
+}
+```
+
 ### TE Host — Biological Process
 
 ```{r go-te-bp, fig.cap="GO Biological Process terms enriched among DE TE host genes, using a TE host-specific background universe (51,934 genes with ≥1 overlapping TE locus, RepeatMasker hg38, M11). Using this restricted universe avoids overestimation of enrichment that would occur with all human genes as background."}
@@ -1355,11 +1395,18 @@ if (!is.null(te_host) && !is.null(de_genes)) {
 
 ## TE Insertions in DE Gene Promoters and Gene Bodies (M11b/M11d)
 
+> **Column guide for tables below:** `Direction` = the condition in which the gene is upregulated (e.g. "mito-ChaRNA" means higher expression in the treatment). `TE context` = whether a TE insertion is detected in the promoter (2 kb upstream TSS), gene body, both, or neither. `Prom TE loci` = number of distinct TE loci in the promoter window.
+
+> **Note on M11b:** The promoter TE annotation module (M11b) did not produce output for this run (te_promoter_genes.tsv is absent). Plots and tables requiring promoter-level TE annotations may show "not available". The de_te_integrated table (M11d) uses only gene-body TE data from M11.
 
 ### Overview: Genes with Promoter TE Insertions
 
 ```{r promoter-te-summary, fig.height=5, fig.width=8, fig.cap="Number of genes with TE insertions within 2kb upstream of the TSS, by TE macrocategory. Based on bedtools intersect of GENCODE v49 promoter windows with RepeatMasker hg38 (M11b)."}
-if (!is.null(te_prom_summary)) {
+if (is.null(te_prom_summary)) {
+  cat("Promoter TE summary not available (M11b produced no output).\n")
+  cat("M11b computes TE insertions within 2kb upstream of each TSS using bedtools.\n")
+  cat("Re-run M11b to enable this section and the downstream enrichment analyses.\n")
+} else {
   te_prom_summary |>
     mutate(te_macrocategory=reorder(te_macrocategory, n_genes_with_promoter_te)) |>
     ggplot(aes(x=te_macrocategory, y=n_genes_with_promoter_te,
@@ -1376,8 +1423,7 @@ if (!is.null(te_prom_summary)) {
                           scales::comma(sum(te_prom_summary$n_genes_with_promoter_te))),
          x=NULL, y="Number of genes") +
     theme_minimal(base_size=12)
-} else cat("Promoter TE summary not available.
-")
+}
 ```
 
 ### DE Genes with TE Insertions — Enrichment Analysis
@@ -2071,11 +2117,12 @@ if (!is.null(wgcna_modules) && nrow(wgcna_modules) > 0) {
 ```
 
 ```{r wgcna-trait-cor, fig.height=5, fig.width=8, fig.cap="WGCNA module-condition correlation. * = p<0.05. Positive = higher in treatment condition."}
-if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0) {
+if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0 &&
+    !all(is.na(wgcna_mt_cor$correlation))) {
   p1 <- wgcna_mt_cor |>
     arrange(pvalue) |>
-    mutate(sig=ifelse(pvalue<0.05,"*",""),
-           module=reorder(module, correlation)) |>
+    mutate(sig=ifelse(!is.na(pvalue) & pvalue<0.05,"*",""),
+           module=reorder(module, ifelse(is.na(correlation),0,correlation))) |>
     ggplot(aes(x=module, y=correlation, fill=correlation>0)) +
     geom_col() +
     geom_text(aes(y=ifelse(correlation>0, correlation+0.05, correlation-0.05),
@@ -2095,12 +2142,24 @@ if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0) {
            across(c(correlation,pvalue), ~round(.,4))) |>
     knitr::kable(caption="WGCNA module-condition correlation table.") |>
     kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+} else if (!is.null(wgcna_mt_cor) && all(is.na(wgcna_mt_cor$correlation))) {
+  cat(sprintf(paste0(
+    "WGCNA module-trait correlations are all NA (%d modules).\n",
+    "This is expected with n=3 samples per condition: WGCNA requires ≥6-10 samples ",
+    "per group for reliable correlation estimates. The modules are detected but ",
+    "cannot be statistically correlated to condition with the current sample size.\n"),
+    nrow(wgcna_mt_cor)))
+  wgcna_mt_cor |>
+    knitr::kable(caption="WGCNA modules (correlations not computable with n=3 per group).") |>
+    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
 } else cat("Module-trait correlation not available.\n")
 ```
 
 # RNA Editing (M19 — JACUSA2)
 
 > A-to-I RNA editing detected via JACUSA2 call-2 comparing BAM files between conditions. A-to-I editing (adenosine-to-inosine, read as guanosine) is catalysed by ADAR enzymes and is dysregulated in many cancers.
+
+> **Note on editing types:** This pipeline currently reports only **A-to-I (A→G)** editing events. C-to-U editing (catalysed by APOBEC enzymes) and other mismatch types are not extracted from the JACUSA2 output in the current M19 implementation. JACUSA2 detects all mismatches, but only A-to-I calls are filtered and reported here. If C-to-U or other editing types are of interest, the JACUSA2 raw output (in m19_editing/) can be parsed separately with a custom filter for the corresponding mismatch direction.
 
 
 ## Editing Summary
@@ -2181,8 +2240,8 @@ if (!is.null(meta_summary)) {
 
 ```{r meta-barplot, fig.height=6, fig.width=10, fig.cap="Relative abundance of microbial species in unmapped reads per sample (Homo sapiens excluded). With full data, microbial signatures (viruses, bacteria, fungi) may be detected here."}
 if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
-  # Use full coldata for metatranscriptomics overview (all conditions)
-  meta_coldata <- if (!is.null(coldata_all)) coldata_all else coldata
+  # Use comparison coldata (filtered to 2 conditions)
+  meta_coldata <- if (!is.null(coldata) && nrow(coldata)>0) coldata else coldata_all
   sample_cols <- meta_coldata$sample_id[meta_coldata$sample_id %in% colnames(meta_abund)]
   rel_df <- meta_abund |>
     tidyr::pivot_longer(all_of(sample_cols),
@@ -2216,7 +2275,7 @@ if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
 
 ```{r meta-condition-barplot, fig.height=5, fig.width=8, fig.cap="Mean microbial composition per condition."}
 if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
-  meta_coldata2 <- if (!is.null(coldata_all)) coldata_all else coldata
+  meta_coldata2 <- if (!is.null(coldata) && nrow(coldata)>0) coldata else coldata_all
   sample_cols_m <- meta_coldata2$sample_id[meta_coldata2$sample_id %in% colnames(meta_abund)]
   cond_map_m <- setNames(meta_coldata2$condition, meta_coldata2$sample_id)
   cond_df <- meta_abund |>
@@ -2242,7 +2301,7 @@ if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
 
 ```{r meta-diversity}
 if (!is.null(meta_diversity)) {
-  meta_coldata3 <- if (!is.null(coldata_all)) coldata_all else coldata
+  meta_coldata3 <- if (!is.null(coldata) && nrow(coldata)>0) coldata else coldata_all
   cond_map3 <- setNames(meta_coldata3$condition, meta_coldata3$sample_id)
   meta_diversity |>
     mutate(across(where(is.numeric), ~round(.,3)),
@@ -2311,6 +2370,8 @@ if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
 ## Functional Profiling (M20b — HUMAnN3)
 
 > HUMAnN3 profiles the functional capacity of microbial communities by mapping unmapped reads to the ChocoPhlAn nucleotide database and UniRef90 protein database. Outputs: gene family abundances (UniRef90 RPK), MetaCyc pathway abundances and coverage.
+
+> **Note:** Module M20b (HUMAnN3) is **disabled** in this project's config.yaml (`m20b_humann: false`). HUMAnN3 is computationally intensive and requires the full ChocoPhlAn + UniRef90 databases (~50 GB). To activate, set `m20b_humann: true` in config.yaml and ensure databases are installed at the paths specified under `databases.chocophlan_db` and `databases.uniref_db`.
 
 
 ```{r humann-pathways}
@@ -2394,7 +2455,7 @@ if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
     head(50) |>
     mutate(somatic = ifelse(somatic_candidate, "yes", "no")) |>
     select(any_of(c("chrom","start","end","te_family","te_macro",
-                    "n_reads_total","n_normal","n_tumor",
+                    "n_reads_total","n_normal","n_tumor","n_control","n_treatment",
                     "somatic","gene_name","dist"))) |>
     DT::datatable(
       caption=sprintf("TE insertion clusters (%d total).", nrow(te_clusters)),
@@ -2404,8 +2465,7 @@ if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
 } else cat("TE insertion cluster data not available.\n")
 ```
 
-```{r te-somatic-plot, fig.height=6, fig.width=10}
-#| fig-cap: !expr sprintf("TE insertion clusters by macrocategory. Somatic candidates = treatment-only insertions (%s not in %s).", p$treatment, p$control)
+```{r te-somatic-plot, fig.height=6, fig.width=10, fig.cap="TE insertion clusters by macrocategory. Somatic candidates = treatment-only insertions (treatment-only)."}
 if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
   shared_label <- paste0("Shared (", p$control, "+", p$treatment, ")")
   somatic_label <- paste0("Somatic candidate (", p$treatment, "-only)")

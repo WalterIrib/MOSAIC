@@ -44,6 +44,17 @@ safe_read <- function(f, ...) {
 # ── Load data ──────────────────────────────────────────────────────────────────
 int_sig   <- safe_read(file.path(de_dir, "genes_fractionChaRNA_phasemitosis_DE_significant.tsv"))
 int_full  <- safe_read(file.path(de_dir, "genes_fractionChaRNA_phasemitosis_DE.tsv"))
+
+# ── Gene name lookup (from integrated gene_type_map) ──────────────────────────
+gene_map_int <- safe_read(file.path(out, "integrated/gene_type_map.tsv"))
+gene_names_int <- if (!is.null(gene_map_int) && all(c("gene_id","gene_name") %in% colnames(gene_map_int))) {
+  setNames(gene_map_int$gene_name, sub("\\..*", "", gene_map_int$gene_id))
+} else character(0)
+label_gene_int <- function(ids) {
+  ids_base <- sub("\\..*", "", ids)
+  nm <- gene_names_int[ids_base]
+  ifelse(!is.na(nm) & nzchar(nm), nm, ids_base)
+}
 phase_all <- safe_read(file.path(de_dir, "genes_phasemitosisvsinterphase_DE.tsv"))
 te_int    <- safe_read(file.path(de_dir, "TE_fractionChaRNA_phasemitosis_DE.tsv"))
 te_phase  <- safe_read(file.path(de_dir, "TE_phase_mitosis_vs_interphase_DE.tsv"))
@@ -178,6 +189,7 @@ cat(sprintf(
 
 ```{r volcano, fig.height=5, fig.width=8}
 if (!is.null(int_full) && nrow(int_full) > 0) {
+  lfc_cap <- 12
   vdf <- int_full |>
     mutate(
       sig = case_when(
@@ -185,23 +197,32 @@ if (!is.null(int_full) && nrow(int_full) > 0) {
         padj < padj_thr & log2FoldChange < -lfc_thr ~ "Down in ChaRNA-mitosis",
         TRUE ~ "NS"
       ),
-      label = ifelse(sig != "NS" & !is.na(gene_id),
-                     sub("\\..*", "", gene_id), NA_character_)
+      lfc_plot = pmax(-lfc_cap, pmin(lfc_cap, log2FoldChange)),
+      capped   = abs(log2FoldChange) > lfc_cap,
+      gene_label = ifelse(sig != "NS" & !is.na(gene_id),
+                          label_gene_int(gene_id), NA_character_)
     )
 
-  ggplot(vdf, aes(x=log2FoldChange, y=-log10(pvalue+1e-300), color=sig)) +
-    geom_point(alpha=0.5, size=1.2) +
-    ggrepel::geom_text_repel(aes(label=label), size=2.8, max.overlaps=20,
-                              na.rm=TRUE, show.legend=FALSE) +
+  ggplot(vdf, aes(x=lfc_plot, y=-log10(pvalue+1e-300), color=sig)) +
+    geom_point(aes(shape=capped), alpha=0.5, size=1.2) +
+    ggrepel::geom_text_repel(aes(label=gene_label), size=2.8, max.overlaps=25,
+                              na.rm=TRUE, show.legend=FALSE,
+                              box.padding=0.35, min.segment.length=0.2) +
     scale_color_manual(values=c(
       "Up in ChaRNA-mitosis"   = col_up,
       "Down in ChaRNA-mitosis" = col_dn,
       "NS" = col_ns
     )) +
+    scale_shape_manual(values=c("FALSE"=16, "TRUE"=17),
+                       labels=c("FALSE"="normal","TRUE"=sprintf("|LFC|>%d (capped)", lfc_cap)),
+                       name=NULL) +
     geom_vline(xintercept=c(-lfc_thr, lfc_thr), linetype="dashed", color="grey40") +
     geom_hline(yintercept=-log10(padj_thr), linetype="dashed", color="grey40") +
+    coord_cartesian(xlim=c(-lfc_cap, lfc_cap)) +
     labs(title="Interaction term: fractionChaRNA:phasemitosis",
-         x="log2FC (interaction)", y="-log10(p-value)", color=NULL) +
+         subtitle=sprintf("Gene symbols shown for significant hits (padj<%.2f, |LFC|>%.1f)", padj_thr, lfc_thr),
+         x=sprintf("log2FC (interaction, capped at ±%d)", lfc_cap),
+         y="-log10(p-value)", color=NULL) +
     theme_minimal(base_size=12) + theme(legend.position="top")
 } else cat("Interaction results not available.\n")
 ```
@@ -213,15 +234,16 @@ if (!is.null(int_sig) && nrow(int_sig) > 0) {
   tbl <- int_sig |>
     mutate(
       gene_id_base = sub("\\..*", "", gene_id),
+      gene_name    = label_gene_int(gene_id),
       LFC_shrunk   = round(log2FoldChange_shrunk, 3),
       LFC_raw      = round(log2FoldChange, 3),
       padj_fmt     = formatC(padj, digits=3, format="g"),
       Direction    = ifelse(log2FoldChange > 0, "↑ ChaRNA-mitosis", "↓ ChaRNA-mitosis")
     ) |>
     arrange(padj) |>
-    select(`Gene ID`=gene_id_base, `LFC (shrunk)`=LFC_shrunk,
-           `LFC (raw)`=LFC_raw, padj=padj_fmt,
-           Direction, baseMean)
+    select(`Gene name`=gene_name, `Gene ID`=gene_id_base,
+           `LFC (shrunk)`=LFC_shrunk, `LFC (raw)`=LFC_raw,
+           padj=padj_fmt, Direction, baseMean)
 
   DT::datatable(tbl,
     caption=sprintf("%d genes with significant ChaRNA-specific change in mitosis (padj<%.2f, |LFC|>%.1f)",
@@ -285,17 +307,26 @@ if (!is.null(phase_all)) {
 
 ```{r phase-volcano, fig.height=4.5, fig.width=7}
 if (!is.null(phase_all) && nrow(phase_all) > 0) {
+  lfc_cap2 <- 12
   vdf2 <- phase_all |>
-    mutate(sig = case_when(
-      padj < padj_thr & log2FoldChange >  lfc_thr ~ "Up in mitosis",
-      padj < padj_thr & log2FoldChange < -lfc_thr ~ "Down in mitosis",
-      TRUE ~ "NS"
-    ))
+    mutate(
+      sig = case_when(
+        padj < padj_thr & log2FoldChange >  lfc_thr ~ "Up in mitosis",
+        padj < padj_thr & log2FoldChange < -lfc_thr ~ "Down in mitosis",
+        TRUE ~ "NS"
+      ),
+      lfc_plot   = pmax(-lfc_cap2, pmin(lfc_cap2, log2FoldChange)),
+      gene_label = ifelse(sig != "NS" & !is.na(gene_id),
+                          label_gene_int(gene_id), NA_character_)
+    )
 
-  ggplot(vdf2, aes(x=log2FoldChange, y=-log10(pvalue+1e-300), color=sig)) +
+  ggplot(vdf2, aes(x=lfc_plot, y=-log10(pvalue+1e-300), color=sig)) +
     geom_point(alpha=0.4, size=1) +
+    ggrepel::geom_text_repel(aes(label=gene_label), size=2.5, max.overlaps=20,
+                              na.rm=TRUE, show.legend=FALSE) +
     scale_color_manual(values=c("Up in mitosis"=col_up,
                                  "Down in mitosis"=col_dn, NS=col_ns)) +
+    coord_cartesian(xlim=c(-lfc_cap2, lfc_cap2)) +
     geom_vline(xintercept=c(-lfc_thr, lfc_thr), linetype="dashed", color="grey40") +
     labs(title="Phase effect (averaged across ChaRNA + totRNA)",
          x="log2FC (mitosis / interphase)", y="-log10(p-value)", color=NULL) +
@@ -308,6 +339,7 @@ if (!is.null(phase_all) && nrow(phase_all) > 0) {
 # Transposable Elements — Interaction
 
 > TE families with a ChaRNA-specific change in mitosis.
+> **Note:** Only 2 significant TE families (MER57E3 and Looper) pass the interaction threshold (padj<0.05). This is a real biological result: the stringent interaction model (`fraction:phase`) corrects for multiple testing across ~999 TE families. MER57E3 (DNA transposon, hAT superfamily) and Looper (Merlin family) showing ChaRNA-specific depletion during mitosis may reflect selective chromatin eviction of these TE-containing regions during cell division.
 
 ```{r te-interaction-table}
 if (!is.null(te_int) && nrow(te_int) > 0) {
