@@ -1279,13 +1279,24 @@ class ModuleRunner:
         out_dir = self.out / "m11b"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        return run_cmd([
+        rmsk_hg38_bed = self.out / "m11" / "rmsk_hg38.bed"
+        if not rmsk_hg38_bed.exists():
+            warn(f"rmsk_hg38.bed not found at {rmsk_hg38_bed} — run M11 first")
+            return False
+
+        genome_fai = Path(cfg.databases.genome_fa).with_suffix(
+            Path(cfg.databases.genome_fa).suffix + ".fai"
+        )
+        cmd = [
             sys.executable, "-m", "mosaic.m11b_promoter_te",
-            "--rmsk-bed",  str(Path(cfg.databases.rmsk_bed)),
+            "--rmsk-bed",  str(rmsk_hg38_bed),
             "--gtf",       str(Path(cfg.databases.gtf)),
             "--outdir",    str(out_dir),
-        ], cwd=self.scripts.parent,
-           log_file=self._log("m11b_promoter_te")) == 0
+        ]
+        if genome_fai.exists():
+            cmd += ["--genome-fai", str(genome_fai)]
+        return run_cmd(cmd, cwd=self.scripts.parent,
+                       log_file=self._log("m11b_promoter_te")) == 0
 
     # ── M11c: TE age ─────────────────────────────────────────────────────────
 
@@ -1320,11 +1331,16 @@ class ModuleRunner:
         out_dir  = comp_dir / "m11d"
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        rmsk_hg38_bed = self.out / "m11" / "rmsk_hg38.bed"
+        if not rmsk_hg38_bed.exists():
+            warn(f"rmsk_hg38.bed not found at {rmsk_hg38_bed} — run M11 first")
+            return False
+
         return run_r_script(self.scripts / "m11d_te_de_integration.R", [
             "--de-genes",      str(comp_dir / "deseq2" / f"genes_{comparison}_DE.tsv"),
             "--norm-counts",   str(comp_dir / "deseq2" / "normalized_counts.tsv"),
             "--te-prom-genes", str(self.out / "m11b" / "te_promoter_genes.tsv"),
-            "--rmsk-bed",      str(Path(cfg.databases.rmsk_bed)),
+            "--rmsk-bed",      str(rmsk_hg38_bed),
             "--gtf",           str(Path(cfg.databases.gtf)),
             "--gene-map",      str(self.out / "integrated" / "gene_type_map.tsv"),
             "--outdir",        str(out_dir),

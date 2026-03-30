@@ -333,3 +333,55 @@ def run_m11b(cfg) -> dict:
         "universe_file":      universe_file,
         "n_genes":            len(gene_ids),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI entry point
+# ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import argparse, sys as _sys
+
+    ap = argparse.ArgumentParser(description="M11b — TE in promoter regions")
+    ap.add_argument("--rmsk-bed",  required=True,
+                    help="Processed RepeatMasker BED (6-col, from M11 output: m11/rmsk_hg38.bed)")
+    ap.add_argument("--gtf",       required=True, help="GENCODE GTF")
+    ap.add_argument("--outdir",    required=True, help="Output directory")
+    ap.add_argument("--genome-fai", default=None, help="Genome .fai for coordinate clamping")
+    ap.add_argument("--upstream",   type=int, default=2000)
+    ap.add_argument("--downstream", type=int, default=200)
+    ap.add_argument("--min-overlap", type=float, default=0.10)
+    args = ap.parse_args()
+
+    out_dir       = Path(args.outdir)
+    rmsk_bed      = Path(args.rmsk_bed)
+    gtf           = Path(args.gtf)
+    genome_fai    = Path(args.genome_fai) if args.genome_fai else None
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if not rmsk_bed.exists():
+        error(f"rmsk BED not found: {rmsk_bed}")
+        _sys.exit(1)
+
+    promoter_bed    = out_dir / "promoters_2kb.bed"
+    intersect_bed   = out_dir / "te_promoter_intersect.bed"
+    te_prom_genes   = out_dir / "te_promoter_genes.tsv"
+    te_prom_summary = out_dir / "te_promoter_summary.tsv"
+
+    build_promoter_bed(gtf=gtf, out_bed=promoter_bed,
+                       upstream=args.upstream, downstream=args.downstream,
+                       genome_fai=genome_fai)
+    intersect_te_promoters(rmsk_bed=rmsk_bed, promoter_bed=promoter_bed,
+                           out_intersect=intersect_bed,
+                           min_overlap_frac=args.min_overlap)
+    build_promoter_te_table(intersect_bed, te_prom_genes, te_prom_summary)
+
+    gene_ids = set()
+    import csv as _csv
+    with open(te_prom_genes) as f:
+        for row in _csv.DictReader(f, delimiter="\t"):
+            gene_ids.add(row["gene_id"])
+    universe_file = out_dir / "te_promoter_universe.txt"
+    universe_file.write_text("\n".join(sorted(gene_ids)))
+    info(f"Promoter TE universe: {len(gene_ids):,} genes")
+    success(f"M11b complete — {len(gene_ids):,} genes with promoter TE insertions")
