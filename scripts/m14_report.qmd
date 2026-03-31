@@ -1007,12 +1007,13 @@ if (!is.null(te_counts) && length(conditions)>0) {
                    ifelse(pval < 0.001, "***",
                    ifelse(pval < 0.01,  "**",
                    ifelse(pval < 0.05,  "*", sprintf("p=%.2f", pval)))))
-      data.frame(macro=m, y=ymax*1.18, label=sig_label, stringsAsFactors=FALSE)
+      data.frame(macro=m, y=ymax*1.28, label=sig_label, stringsAsFactors=FALSE)
     }))
   } else NULL
 
+  # n= label positioned just above each bar's error bar (per-macro, lower than p-value)
   n_label <- macro_summ |> group_by(macro) |>
-    summarise(n_fam=round(mean(n_fam)), y=max(mean_total+sd_total)*1.08, .groups="drop")
+    summarise(n_fam=round(mean(n_fam)), y=max(mean_total+sd_total, na.rm=TRUE)*1.05, .groups="drop")
 
   p_macro <- ggplot(macro_summ,
          aes(x=reorder(macro,-mean_total), y=mean_total, fill=condition)) +
@@ -1250,13 +1251,14 @@ if (!is.null(sat_counts) && !is.null(coldata_all) && nrow(sat_counts) > 0) {
     })
     wilcox_df <- do.call(rbind, wilcox_res) |>
       filter(!is.na(wilcox_pval)) |>
+      arrange(wilcox_pval) |>
       mutate(
         sat_macro = classify_sat_macro(family_id),
         direction = ifelse(log2FC > 0, paste0("UP in ", p$treatment),
                            paste0("DOWN in ", p$treatment)),
-        sig_label = ifelse(wilcox_pval < 0.05, family_id, NA_character_)
-      ) |>
-      arrange(wilcox_pval)
+        # Label top 12 by p-value regardless of threshold (n=3 rarely reaches p<0.05)
+        sig_label = ifelse(row_number() <= 12, family_id, NA_character_)
+      )
 
     ggplot(wilcox_df, aes(x=log2FC, y=-log10(wilcox_pval),
                            color=direction, size=baseMean, label=sig_label)) +
@@ -1286,33 +1288,32 @@ if (!is.null(sat_counts) && !is.null(coldata_all) && nrow(sat_counts) > 0) {
 
 > Per-family Wilcoxon lacks power (n=3). Aggregating counts across families within each macrocategory increases power by reducing the multiple-testing burden and summing signal across co-regulated families.
 
-```{r sat-aggregate-macro, fig.height=5, fig.width=9, fig.cap="Aggregated satellite expression by macrocategory. Bar = mean total counts across samples; error bars = SEM. Wilcoxon p-value shown above each pair."}
+```{r sat-aggregate-macro-data, include=FALSE}
+# Compute aggregated satellite data (used by table and plot chunks below)
+.sat_agg_ok <- FALSE
 if (!is.null(sat_counts) && !is.null(coldata_all) && nrow(sat_counts) > 0) {
-  treat_sids   <- coldata_all$sample_id[coldata_all$condition == p$treatment]
-  control_sids <- coldata_all$sample_id[coldata_all$condition == p$control]
-  treat_sids   <- treat_sids[treat_sids %in% colnames(sat_counts)]
-  control_sids <- control_sids[control_sids %in% colnames(sat_counts)]
+  .treat_sids_agg   <- coldata_all$sample_id[coldata_all$condition == p$treatment]
+  .control_sids_agg <- coldata_all$sample_id[coldata_all$condition == p$control]
+  .treat_sids_agg   <- .treat_sids_agg[.treat_sids_agg %in% colnames(sat_counts)]
+  .control_sids_agg <- .control_sids_agg[.control_sids_agg %in% colnames(sat_counts)]
 
-  if (length(treat_sids) >= 2 && length(control_sids) >= 2) {
-    # Assign macrocategory to each family
-    fam_macro <- classify_sat_macro(rownames(sat_counts))
-    names(fam_macro) <- rownames(sat_counts)
+  if (length(.treat_sids_agg) >= 2 && length(.control_sids_agg) >= 2) {
+    fam_macro_agg <- classify_sat_macro(rownames(sat_counts))
+    names(fam_macro_agg) <- rownames(sat_counts)
 
-    # Aggregate counts per sample per macrocategory
-    agg_list <- lapply(unique(fam_macro), function(mac) {
-      fams <- names(fam_macro)[fam_macro == mac]
-      if (length(fams) == 1) {
-        cnt <- sat_counts[fams, c(treat_sids, control_sids), drop=FALSE]
-        totals <- as.numeric(cnt)
+    agg_list <- lapply(unique(fam_macro_agg), function(mac) {
+      fams <- names(fam_macro_agg)[fam_macro_agg == mac]
+      totals <- if (length(fams) == 1) {
+        as.numeric(sat_counts[fams, c(.treat_sids_agg, .control_sids_agg), drop=FALSE])
       } else {
-        totals <- colSums(sat_counts[fams, c(treat_sids, control_sids), drop=FALSE])
+        colSums(sat_counts[fams, c(.treat_sids_agg, .control_sids_agg), drop=FALSE])
       }
-      cond <- c(rep(p$treatment, length(treat_sids)), rep(p$control, length(control_sids)))
+      cond <- c(rep(p$treatment, length(.treat_sids_agg)),
+                rep(p$control,   length(.control_sids_agg)))
       data.frame(macro=mac, counts=totals, condition=cond)
     })
     agg_df <- do.call(rbind, agg_list)
 
-    # Wilcoxon per macrocategory
     wilcox_mac <- agg_df |>
       group_by(macro) |>
       summarise(
@@ -1325,49 +1326,66 @@ if (!is.null(sat_counts) && !is.null(coldata_all) && nrow(sat_counts) > 0) {
         .groups="drop"
       ) |>
       mutate(
+        # Only mark significant pairs (p<0.05); leave others blank
+        sig_mark  = case_when(
+          is.na(pval)    ~ "",
+          pval < 0.001   ~ "***",
+          pval < 0.01    ~ "**",
+          pval < 0.05    ~ "*",
+          TRUE           ~ ""
+        ),
         pval_label = ifelse(!is.na(pval), sprintf("p=%.3f", pval), "NA"),
         direction  = ifelse(mean_treat > mean_ctrl,
-                            paste0("↑ ",p$treatment), paste0("↓ ",p$treatment))
+                            paste0("↑ ", p$treatment), paste0("↓ ", p$treatment))
       )
-
-    # Summary table
-    knitr::kable(
-      wilcox_mac |>
-        mutate(lfc=round(log2((mean_treat+0.5)/(mean_ctrl+0.5)),3),
-               mean_treat=round(mean_treat,1), mean_ctrl=round(mean_ctrl,1),
-               pval=round(pval,4)) |>
-        select(macro, mean_treat, mean_ctrl, lfc, pval, direction) |>
-        arrange(pval),
-      col.names=c("Macrocategory", sprintf("Mean(%s)",p$treatment),
-                  sprintf("Mean(%s)",p$control), "log2FC", "Wilcoxon p", "Direction"),
-      caption="Aggregated satellite Wilcoxon by macrocategory (uncorrected)"
-    ) |> kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE) |>
-      print()
-
-    # Bar plot
-    agg_df |>
-      group_by(macro, condition) |>
-      summarise(mean_cnt=mean(counts), sem=sd(counts)/sqrt(n()), .groups="drop") |>
-      mutate(condition=factor(condition, levels=c(p$control, p$treatment))) |>
-      ggplot(aes(x=macro, y=mean_cnt, fill=condition)) +
-      geom_col(position="dodge") +
-      geom_errorbar(aes(ymin=mean_cnt-sem, ymax=mean_cnt+sem),
-                    position=position_dodge(0.9), width=0.3) +
-      geom_text(data=wilcox_mac,
-                aes(x=macro, y=pmax(mean_treat,mean_ctrl)*1.15,
-                    label=pval_label, fill=NULL),
-                size=3, inherit.aes=FALSE) +
-      scale_fill_manual(values=setNames(c("#85C1E9","#E74C3C"),
-                                        c(p$control, p$treatment)), name="Condition") +
-      labs(title="Satellite expression aggregated by macrocategory",
-           subtitle="Mean total counts ± SEM; Wilcoxon p shown",
-           x=NULL, y="Mean total fragment counts") +
-      theme_minimal(base_size=12) +
-      theme(axis.text.x=element_text(angle=25, hjust=1))
-  } else {
-    cat("Not enough samples for aggregated analysis.\n")
+    .sat_agg_ok <- TRUE
   }
-} else cat("Satellite counts or coldata not available.\n")
+}
+```
+
+```{r sat-aggregate-macro-table, results='asis', echo=FALSE}
+if (isTRUE(.sat_agg_ok)) {
+  knitr::kable(
+    wilcox_mac |>
+      mutate(lfc=round(log2((mean_treat+0.5)/(mean_ctrl+0.5)),3),
+             mean_treat=round(mean_treat,1), mean_ctrl=round(mean_ctrl,1),
+             pval=round(pval,4)) |>
+      select(macro, mean_treat, mean_ctrl, lfc, pval, sig_mark, direction) |>
+      arrange(pval),
+    col.names=c("Macrocategory", sprintf("Mean(%s)",p$treatment),
+                sprintf("Mean(%s)",p$control), "log2FC", "Wilcoxon p", "Sig", "Direction"),
+    caption="Aggregated satellite Wilcoxon by macrocategory (uncorrected). Sig: * p<0.05, ** p<0.01, *** p<0.001."
+  ) |> kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+} else {
+  cat("Satellite counts or coldata not available / insufficient samples.\n")
+}
+```
+
+```{r sat-aggregate-macro-plot, fig.height=5, fig.width=9, fig.cap="Aggregated satellite expression by macrocategory. Bar = mean total counts across samples; error bars = SEM. Only statistically significant differences (p<0.05, uncorrected Wilcoxon) are marked with asterisks above the bars."}
+if (isTRUE(.sat_agg_ok)) {
+  agg_df |>
+    group_by(macro, condition) |>
+    summarise(mean_cnt=mean(counts), sem=sd(counts)/sqrt(n()), .groups="drop") |>
+    mutate(condition=factor(condition, levels=c(p$control, p$treatment))) |>
+    ggplot(aes(x=macro, y=mean_cnt, fill=condition)) +
+    geom_col(position="dodge") +
+    geom_errorbar(aes(ymin=mean_cnt-sem, ymax=mean_cnt+sem),
+                  position=position_dodge(0.9), width=0.3) +
+    # Only show label if significant
+    geom_text(data=wilcox_mac |> filter(nzchar(sig_mark)),
+              aes(x=macro, y=pmax(mean_treat, mean_ctrl)*1.12,
+                  label=sig_mark, fill=NULL),
+              size=4.5, fontface="bold", color="#C0392B", inherit.aes=FALSE) +
+    scale_fill_manual(values=setNames(c("#85C1E9","#E74C3C"),
+                                      c(p$control, p$treatment)), name="Condition") +
+    labs(title="Satellite expression aggregated by macrocategory",
+         subtitle="Mean total counts ± SEM. * p<0.05, ** p<0.01, *** p<0.001 (Wilcoxon, uncorrected)",
+         x=NULL, y="Mean total fragment counts") +
+    theme_minimal(base_size=12) +
+    theme(axis.text.x=element_text(angle=25, hjust=1))
+} else {
+  cat("Aggregated satellite plot not available.\n")
+}
 ```
 
 ---
@@ -1599,7 +1617,7 @@ go_bar(go_te_cc, "GO CC — TE host genes (rmsk universe)",
 
 ## TE Genomic Distribution
 
-```{r te-genomic, fig.height=6, fig.width=9, fig.cap="Top 30 genes ranked by TE insertion density in their gene body among DE TE host genes (TE loci per kb of gene body). Only genes that are both differentially expressed AND host at least one TE locus are shown. Density normalisation corrects for gene length bias. Colour indicates TE macrocategory with the highest density per gene."}
+```{r te-genomic, fig.height=6, fig.width=9, fig.cap="Top 30 DE TE-host genes ranked by TE insertion density (TE loci per kb of gene body). A higher density means more TE copies are embedded within the gene relative to its length. Only genes that are both differentially expressed (padj < threshold) AND host ≥1 TE locus in RepeatMasker hg38 are included. Density normalisation corrects for gene length bias: long genes naturally accumulate more TE loci and would otherwise dominate a raw-count ranking. Colour indicates the dominant TE macrocategory (highest density) per gene."}
 if (!is.null(te_host) && !is.null(de_genes)) {
   # Get DE gene IDs
   gid_col_de  <- colnames(de_genes)[ncol(de_genes)]
@@ -1667,7 +1685,13 @@ if (!is.null(te_host) && !is.null(de_genes)) {
 
 ## TE Insertions in DE Gene Promoters and Gene Bodies (M11b/M11d)
 
-> **Column guide for tables below:** `Direction` = the condition in which the gene is upregulated (e.g. "mito-ChaRNA" means higher expression in the treatment). `TE context` = whether a TE insertion is detected in the promoter (2 kb upstream TSS), gene body, both, or neither. `Prom TE loci` = number of distinct TE loci in the promoter window.
+> **Column guide for tables below:**
+> - `Direction` = the condition in which the gene is upregulated (e.g. "mito-ChaRNA" means higher expression in the treatment group; "ChaRNA" means higher in control). Determined by the sign of log2FC.
+> - `TE context` = whether a TE insertion is detected in the promoter (2 kb upstream TSS), gene body, both, or neither (`No TE` = no RepeatMasker locus overlaps either window — the gene is differentially expressed independently of detectable TE presence).
+> - `Prom TE loci` = number of distinct RepeatMasker loci in the 2 kb promoter window.
+> - `No TE` category (grey in stacked bar): DE genes where neither promoter nor gene body contains a TE insertion in RepeatMasker hg38. This does not mean the gene is TE-free genome-wide — it means no locus falls within the defined windows.
+
+> **Lollipop plot symbols (section below):** Each gene is a dot on a stick. Dot position = log2FC (right = up in treatment). Dot size ∝ significance (larger = smaller padj). Symbol prefix in colour legend indicates TE context: `** Prom+Body` = TE in both windows; `>> Promoter` = promoter only; `>> Body` = gene body only; `-- None` = no TE in either window.
 
 > **Promoter TE context (M11b):** Genes are annotated with TE insertions within 2 kb upstream of the TSS (bedtools intersect, RepeatMasker hg38). Gene body TE overlap from M11. Integrated view in M11d combines promoter TE, body TE, and DE status.
 
@@ -1965,9 +1989,9 @@ if (!is.null(tet_sig) && nrow(tet_sig) > 0) {
 ")
   }
 } else {
-  cat("TEtranscripts (M12) data not available for this comparison.\n")
-  cat("TEtranscripts uses EM to resolve reads simultaneously to TE loci and canonical genes.\n")
-  cat("Run the pipeline with m12_tetranscripts: true and execute m12 to generate results.\n")
+  cat("**M12 (TEtranscripts) — not run for this dataset.**\n\n")
+  cat("TEtranscripts v2.2.3 uses Expectation-Maximization (EM) to resolve multi-mapping reads between canonical gene loci and individual TE insertions in RepeatMasker hg38. It provides locus-level TE quantification complementary to the pseudochromosome family-level approach (Section 3).\n\n")
+  cat("M12 has not been executed for this comparison. To enable this section, run M12 and regenerate the report.\n")
 }
 ```
 
@@ -2508,30 +2532,82 @@ if (!is.null(editing_per_gene) && nrow(editing_per_gene) > 0) {
 
 > All base-substitution mismatches detected by JACUSA2 (A→G, C→T, A→C, A→T, C→A, C→G, G→A, G→C, G→T, T→A, T→C, T→G). Filtered for sites supported by ≥3 reads and >5% mismatch frequency per condition.
 
-```{r editing-all-types, fig.height=5, fig.width=9, fig.cap="Distribution of all mismatch types detected by JACUSA2. A→G = A-to-I (ADAR); C→T = C-to-U (APOBEC). Only sites with sufficient support (≥3 reads, ≥5% frequency) are shown."}
+```{r editing-all-types, fig.height=6, fig.width=10, fig.cap="Mean editing frequency (EF) per mismatch type, split by condition (control = EF1, treatment = EF2). Error bars = SEM across sites. Wilcoxon p-value shown for each type (treatment vs control EF per site). Red = ADAR canonical (A→G); blue = APOBEC canonical (C→T); grey = other types. Only types with ≥10 supporting sites are shown."}
 if (!is.null(editing_sites_all) && nrow(editing_sites_all) > 0) {
   mut_col <- if ("mutation_type" %in% colnames(editing_sites_all)) "mutation_type" else
              if ("edit_type"     %in% colnames(editing_sites_all)) "edit_type" else NULL
-  if (!is.null(mut_col)) {
-    type_counts <- editing_sites_all |>
-      count(.data[[mut_col]], name="n_sites") |>
-      arrange(desc(n_sites)) |>
+  if (!is.null(mut_col) && all(c("EF1","EF2") %in% colnames(editing_sites_all))) {
+    canonical_adar   <- c("AG","A>G","TC","T>C")
+    canonical_apobec <- c("CT","C>T","GA","G>A")
+
+    type_ef <- editing_sites_all |>
+      group_by(.data[[mut_col]]) |>
+      summarise(
+        n_sites  = n(),
+        mean_EF1 = mean(EF1, na.rm=TRUE),
+        sem_EF1  = sd(EF1, na.rm=TRUE) / sqrt(sum(!is.na(EF1))),
+        mean_EF2 = mean(EF2, na.rm=TRUE),
+        sem_EF2  = sd(EF2, na.rm=TRUE) / sqrt(sum(!is.na(EF2))),
+        wilcox_p = tryCatch(
+          wilcox.test(EF2, EF1, paired=FALSE, exact=FALSE)$p.value,
+          error=function(e) NA_real_),
+        .groups="drop"
+      ) |>
+      filter(n_sites >= 10) |>
       mutate(
-        highlight = .data[[mut_col]] %in% c("AG","CT","A>G","C>T"),
-        label_col = mut_col
+        edit_class = case_when(
+          .data[[mut_col]] %in% canonical_adar   ~ "ADAR (A→G)",
+          .data[[mut_col]] %in% canonical_apobec ~ "APOBEC (C→T)",
+          TRUE                                   ~ "other"
+        ),
+        sig_mark = case_when(
+          is.na(wilcox_p)  ~ "",
+          wilcox_p < 0.001 ~ "***",
+          wilcox_p < 0.01  ~ "**",
+          wilcox_p < 0.05  ~ "*",
+          TRUE              ~ ""
+        ),
+        p_label = ifelse(!is.na(wilcox_p), sprintf("p=%.3f", wilcox_p), "")
+      ) |>
+      arrange(desc(mean_EF2 + mean_EF1))
+
+    # Pivot to long format for grouped bars
+    ef_long <- type_ef |>
+      tidyr::pivot_longer(c(mean_EF1, mean_EF2),
+                          names_to="cond_key", values_to="mean_EF") |>
+      mutate(
+        condition = ifelse(cond_key == "mean_EF1", p$control, p$treatment),
+        sem       = ifelse(cond_key == "mean_EF1", sem_EF1, sem_EF2)
       )
-    ggplot(type_counts, aes(x=reorder(.data[[mut_col]], n_sites), y=n_sites,
-                             fill=highlight)) +
-      geom_col(show.legend=FALSE) +
-      scale_fill_manual(values=c("TRUE"="#E74C3C","FALSE"="#85C1E9")) +
+
+    # y position for p labels (above the taller bar)
+    p_pos <- type_ef |>
+      mutate(y_pos = pmax(mean_EF1, mean_EF2) + pmax(sem_EF1, sem_EF2) + 0.005)
+
+    col_class <- c("ADAR (A→G)"="#E74C3C", "APOBEC (C→T)"="#3498DB", "other"="#BDC3C7")
+
+    ggplot(ef_long,
+           aes(x=reorder(.data[[mut_col]], mean_EF + mean_EF),
+               y=mean_EF, fill=edit_class, alpha=condition)) +
+      geom_col(position=position_dodge(0.8), width=0.7) +
+      geom_errorbar(aes(ymin=pmax(mean_EF-sem,0), ymax=mean_EF+sem),
+                    position=position_dodge(0.8), width=0.3, linewidth=0.5,
+                    show.legend=FALSE) +
+      # Show p-value only if significant
+      geom_text(data=p_pos |> filter(nzchar(sig_mark)),
+                aes(x=.data[[mut_col]], y=y_pos, label=sig_mark, fill=NULL, alpha=NULL),
+                size=4.5, fontface="bold", color="#C0392B", inherit.aes=FALSE) +
+      scale_fill_manual(values=col_class, name="Editing class") +
+      scale_alpha_manual(values=setNames(c(0.55, 1.0), c(p$control, p$treatment)),
+                         name="Condition") +
       coord_flip() +
-      labs(title=sprintf("RNA mismatch types: %s vs %s (JACUSA2)",
+      labs(title=sprintf("RNA mismatch types: mean EF per condition (%s vs %s)",
                          p$treatment, p$control),
-           subtitle="Red = canonical editing types (A→G ADAR, C→T APOBEC)",
-           x="Mismatch type", y="Number of sites") +
+           subtitle="Bars = mean EF ± SEM across sites. * p<0.05, ** p<0.01, *** p<0.001 (Wilcoxon, site-level)",
+           x="Mismatch type", y="Mean editing frequency") +
       theme_minimal(base_size=12)
   } else {
-    cat("Column 'mutation_type' or 'edit_type' not found in editing_sites_all.tsv.\n")
+    cat("Column 'mutation_type'/'edit_type' or EF1/EF2 not found in editing_sites_all.tsv.\n")
     cat(sprintf("Available columns: %s\n", paste(colnames(editing_sites_all), collapse=", ")))
   }
 } else {
@@ -2616,20 +2692,30 @@ if (!is.null(editing_sites_all) && nrow(editing_sites_all) > 0 &&
     theme_minimal(base_size=11)
 
   gridExtra::grid.arrange(p_ef, p_vol, ncol=2)
-
-  cat("\n**Differential editing by type (BH-corrected):**\n\n")
-  type_stats |>
-    mutate(across(c(mean_EF1,mean_EF2,log2FC_EF), ~round(.,4)),
-           wilcox_p=round(wilcox_p,4), padj=round(padj,4)) |>
-    select(.data[[mut_col]], n_sites, mean_EF1, mean_EF2,
-           log2FC_EF, wilcox_p, padj, edit_class) |>
-    rename(mutation_type=1, !!paste0("mean_EF_",p$control):=mean_EF1,
-           !!paste0("mean_EF_",p$treatment):=mean_EF2) |>
-    knitr::kable() |>
-    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE) |>
-    print()
+  # Save type_stats for table chunk below
+  .type_stats_df <- type_stats
+  .mut_col_saved <- mut_col
 } else {
   cat("All-type editing data not available for differential analysis.\n")
+  .type_stats_df <- NULL
+  .mut_col_saved <- NULL
+}
+```
+
+```{r editing-diff-by-type-table, results='asis', echo=FALSE}
+# Table in separate chunk (results='asis') to avoid raw HTML leaking into plots
+if (!is.null(.type_stats_df) && nrow(.type_stats_df) > 0) {
+  cat("\n**Differential editing by type (BH-corrected):**\n\n")
+  .type_stats_df |>
+    mutate(across(c(mean_EF1, mean_EF2, log2FC_EF), ~round(., 4)),
+           wilcox_p=round(wilcox_p, 4), padj=round(padj, 4)) |>
+    select(.data[[.mut_col_saved]], n_sites, mean_EF1, mean_EF2,
+           log2FC_EF, wilcox_p, padj, edit_class) |>
+    dplyr::rename(mutation_type=1,
+                  !!paste0("mean_EF_", p$control)  := mean_EF1,
+                  !!paste0("mean_EF_", p$treatment) := mean_EF2) |>
+    knitr::kable(caption="Differential editing frequency by mismatch type. BH-corrected p-value. Types with padj<0.05 are statistically significant.") |>
+    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
 }
 ```
 
@@ -2751,12 +2837,13 @@ if (!is.null(editing_sites) && nrow(editing_sites) > 0 &&
 ```{r meta-classification}
 if (!is.null(meta_summary)) {
   meta_summary |>
+    filter(condition %in% c(p$treatment, p$control)) |>
     mutate(pct_classified=paste0(pct_classified,"%")) |>
     select(Sample=sample_id, Condition=condition,
            `Total reads`=total_reads,
            `Classified`=classified,
            `% classified`=pct_classified) |>
-    knitr::kable(caption="Kraken2 classification rates for unmapped reads.") |>
+    knitr::kable(caption=sprintf("Kraken2 classification rates for unmapped reads — %s vs %s.", p$treatment, p$control)) |>
     kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
 } else {
   cat("Kraken2 classification summary not available (kraken2_classification_summary.tsv missing).\n\n")
@@ -2917,9 +3004,7 @@ if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
 
 ## Functional Profiling (M20b — HUMAnN3)
 
-> HUMAnN3 profiles the functional capacity of microbial communities by mapping unmapped reads to the ChocoPhlAn nucleotide database and UniRef90 protein database. Outputs: gene family abundances (UniRef90 RPK), MetaCyc pathway abundances and coverage.
-
-> HUMAnN3 profiles the functional capacity of microbial communities by mapping unmapped reads to the ChocoPhlAn nucleotide database and UniRef90 protein database. HUMAnN3 is computationally intensive (~50 GB databases required). Run M20b to generate pathway and gene family abundance data.
+> HUMAnN3 profiles the functional capacity of microbial communities by mapping unmapped reads to the ChocoPhlAn nucleotide database and UniRef90 protein database. Outputs: gene family abundances (UniRef90 RPK), MetaCyc pathway abundances and coverage. HUMAnN3 is computationally intensive (~50 GB databases required). **M20b has not been run for this dataset** — tables below will populate after execution.
 
 
 ```{r humann-pathways}
@@ -3013,7 +3098,9 @@ if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
 } else cat("TE insertion cluster data not available.\n")
 ```
 
-```{r te-somatic-plot, fig.height=6, fig.width=11, fig.cap="TE insertion clusters by macrocategory and condition origin. 'Shared' = both conditions; 'treatment-only' = somatic candidate; 'control-only' = germline candidate absent in treatment. Bar height = number of clusters; numbers show total supporting reads for that category."}
+> **Why do cluster counts differ between conditions?** M23 counts soft-clipped reads mapping to TE consensus sequences (DFAM 3.9) at each genomic locus. Differences between conditions reflect: (1) genuine somatic TE insertions present only in one state (mitosis vs interphase); (2) differences in chromatin accessibility affecting soft-clip production — compacted mitotic chromatin may generate more artifactual clips at certain loci; (3) read depth variation between samples. Somatic candidates (`treatment-only`) require ≥1 supporting read in treatment and 0 in control. Interpret with caution: with n=3 replicates, individual-level variation can generate spurious condition-specific clusters.
+
+```{r te-somatic-plot, fig.height=7, fig.width=12, fig.cap="TE insertion clusters by macrocategory and condition origin. 'Shared' = detected in both conditions; '[treatment]-only' = somatic candidate (present in treatment, absent in control); '[control]-only' = candidate absent in treatment. Left: cluster count per macrocategory; right: total supporting reads. Numbers above bars = cluster count."}
 if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
   # Determine per-condition count columns (support both n_normal/n_tumor and n_control/n_treatment)
   nc_col <- if ("n_control"   %in% colnames(te_clusters)) "n_control"   else
@@ -3072,27 +3159,31 @@ if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
       theme(axis.text.x=element_text(angle=30, hjust=1))
 
     gridExtra::grid.arrange(p1, p2, ncol=2)
-
-    # Summary table
-    cat("\n**Cluster summary by origin:**\n\n")
-    te_plot |>
+    # Save summary for table chunk
+    .te_origin_summary <- te_plot |>
       group_by(origin) |>
-      summarise(
-        n_clusters    = n(),
-        total_reads   = sum(n_reads_total, na.rm=TRUE),
-        pct_clusters  = round(100 * n() / nrow(te_plot), 1),
-        .groups="drop"
-      ) |>
-      arrange(desc(n_clusters)) |>
-      knitr::kable(col.names=c("Origin","Clusters","Total reads","% of clusters")) |>
-      kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE) |>
-      print()
+      summarise(n_clusters=n(), total_reads=sum(n_reads_total, na.rm=TRUE),
+                pct_clusters=round(100*n()/nrow(te_plot),1), .groups="drop") |>
+      arrange(desc(n_clusters))
   } else {
-    # Fallback: no per-condition columns
     cat(sprintf("Per-condition columns (n_control/n_treatment) not found in cluster table.\n"))
     cat(sprintf("Available columns: %s\n", paste(colnames(te_clusters), collapse=", ")))
+    .te_origin_summary <- NULL
   }
-} else cat("TE cluster data not available.\n")
+} else {
+  cat("TE cluster data not available.\n")
+  .te_origin_summary <- NULL
+}
+```
+
+```{r te-somatic-summary-table, results='asis', echo=FALSE}
+if (!is.null(.te_origin_summary) && nrow(.te_origin_summary) > 0) {
+  cat("\n**Cluster summary by origin:**\n\n")
+  .te_origin_summary |>
+    knitr::kable(col.names=c("Origin","Clusters","Total reads","% of clusters"),
+                 caption="TE insertion cluster summary by condition origin. Treatment-only = somatic candidates.") |>
+    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+}
 ```
 
 # Methods

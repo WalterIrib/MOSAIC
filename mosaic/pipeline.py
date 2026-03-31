@@ -1134,12 +1134,12 @@ class ModuleRunner:
             thresholds = cfg.thresholds
             ret = run_cmd([
                 "quarto", "render",
-                str(interaction_qmd),
+                "m14_interaction_report.qmd",  # relative path — CWD is self.scripts
                 "-P", f"out_dir:{self.out}",
                 "-P", f"padj_threshold:{thresholds.padj}",
                 "-P", f"lfc_threshold:{thresholds.lfc}",
                 "--output-dir", str(out_dir),
-            ], log_file=self._log("m14_report", comparison))
+            ], cwd=self.scripts, log_file=self._log("m14_report", comparison))
             return ret == 0
 
         comp = self._parse_comparison(comparison)
@@ -1159,7 +1159,7 @@ class ModuleRunner:
         main_out = self.out
         ret = run_cmd([
             "quarto", "render",
-            str(self.scripts / "m14_report.qmd"),
+            "m14_report.qmd",   # relative path — CWD is self.scripts
             "-P", f"out_dir:{main_out}",
             "-P", f"comparison:{comparison}",
             "-P", f"treatment:{treatment}",
@@ -1168,7 +1168,7 @@ class ModuleRunner:
             "-P", f"lfc_threshold:{thresholds.lfc}",
             "-P", f"coldata_path:{cfg.samples.coldata}",
             "--output-dir", str(out_dir),
-        ], log_file=self._log("m14_report", comparison))
+        ], cwd=self.scripts, log_file=self._log("m14_report", comparison))
         return ret == 0
 
 
