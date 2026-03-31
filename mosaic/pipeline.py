@@ -1673,12 +1673,15 @@ class ModuleRunner:
     def _run_m23_te_insertions(self, comparison=None) -> bool:
         cfg     = self.cfg
         bam_dir = self.out / "mapping" / "bam"
-        out_dir = self.out / "m23_te_insertions"
-        out_dir.mkdir(parents=True, exist_ok=True)
         comp    = self._parse_comparison(comparison)
         if not comp:
             return False
         treatment, control = comp
+
+        # Per-comparison output directory to avoid overwrites across comparisons
+        comp_name = comparison or f"{treatment}_vs_{control}"
+        out_dir   = self.out / "m23_te_insertions" / comp_name
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         normal_chim = ",".join(
             str(bam_dir / sid / f"{sid}_Chimeric.out.sam")
@@ -1701,7 +1704,7 @@ class ModuleRunner:
             "--min-mapq",              "0",
             "--condition-control",     control,
             "--condition-treatment",   treatment,
-        ], cwd=self.scripts.parent, log_file=self._log("m23_te_insertions")) == 0
+        ], cwd=self.scripts.parent, log_file=self._log("m23_te_insertions", comp_name)) == 0
 
     # ── M15: Fusion genes (Arriba) ───────────────────────────────────────────
 

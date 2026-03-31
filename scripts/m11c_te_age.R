@@ -326,9 +326,11 @@ if (!is.null(opt[["te-de"]]) && file.exists(opt[["te-de"]])) {
         theme_minimal(base_size=12) +
         theme(legend.position="right")
 
-      ggsave(file.path(opt$outdir, "te_age_vs_de.pdf"),
+      comp_tag <- if (!is.null(opt$treatment) && !is.null(opt$control))
+                    sprintf("_%s_vs_%s", opt$treatment, opt$control) else ""
+      ggsave(file.path(opt$outdir, sprintf("te_age_vs_de%s.pdf", comp_tag)),
              p_age_de, width=10, height=7)
-      ggsave(file.path(opt$outdir, "te_age_vs_de.png"),
+      ggsave(file.path(opt$outdir, sprintf("te_age_vs_de%s.png", comp_tag)),
              p_age_de, width=10, height=7, dpi=150)
 
       # Pearson correlation
@@ -339,7 +341,7 @@ if (!is.null(opt[["te-de"]]) && file.exists(opt[["te-de"]])) {
       write.table(
         te_age_de |> select(family_id, macro, mean_div, n_loci,
                              all_of(lfc_col), all_of(pval_col)),
-        file.path(opt$outdir, "te_age_de_table.tsv"),
+        file.path(opt$outdir, sprintf("te_age_de_table%s.tsv", comp_tag)),
         sep="\t", quote=FALSE, row.names=FALSE
       )
       cat("[OK] TE age vs DE plot saved.\n")
