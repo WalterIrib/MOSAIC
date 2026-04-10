@@ -54,7 +54,9 @@ option_list <- list(
   make_option("--ref-fraction", type="character", default=NULL,
               help="Reference level for fraction (interaction mode)"),
   make_option("--ref-phase",    type="character", default=NULL,
-              help="Reference level for phase (interaction mode)")
+              help="Reference level for phase (interaction mode)"),
+  make_option("--comparison",   type="character", default=NULL,
+              help="Comparison name used for standardized output file alias (interaction mode)")
 )
 
 opt <- parse_args(OptionParser(option_list=option_list))
@@ -266,7 +268,19 @@ if (opt$mode == "interaction") {
                                   gsub("\\.", "_", interact_coef))),
     sep="\t", quote=FALSE, row.names=FALSE)
 
-  # Extract phase result (totRNA mitosis effect = background)
+  # ── Standardized alias files for unified report template ─────────────────
+  # m14_report.qmd expects genes_{comparison}_DE.tsv; write aliases so the
+  # standard template can read interaction results without special-casing.
+  std_comp <- if (!is.null(opt$comparison)) opt$comparison else "ChaRNA_interaction"
+  std_full <- file.path(opt$outdir, sprintf("genes_%s_DE.tsv", std_comp))
+  std_sig  <- file.path(opt$outdir, sprintf("genes_%s_DE_significant.tsv", std_comp))
+  if (normalizePath(std_full) != normalizePath(out_interact)) {
+    write.table(res_interact, std_full, sep="\t", quote=FALSE, row.names=FALSE)
+    write.table(sig_interact, std_sig,  sep="\t", quote=FALSE, row.names=FALSE)
+    cat(sprintf("[INF] Standardized alias: %s\n", basename(std_full)))
+  }
+
+  # Extract phase result (totRNA mitosis effect = background / global phase effect)
   res_phase <- extract_coef_results(
     dds_int, phase_coef,
     label=sprintf("phase_(%s)", phase_coef),
@@ -275,6 +289,10 @@ if (opt$mode == "interaction") {
   out_phase <- file.path(opt$outdir,
                          sprintf("genes_%s_DE.tsv", gsub("_", "", phase_coef)))
   write.table(res_phase, out_phase, sep="\t", quote=FALSE, row.names=FALSE)
+  # Also write standardized alias for phase effect
+  write.table(res_phase,
+    file.path(opt$outdir, sprintf("genes_%s_phase_effect_DE.tsv", std_comp)),
+    sep="\t", quote=FALSE, row.names=FALSE)
   cat(sprintf("[INF] Written: %s\n", basename(out_phase)))
 
   # TE and satellite DE (interaction mode)
@@ -312,6 +330,14 @@ if (opt$mode == "interaction") {
       out_te <- file.path(opt$outdir, sprintf("%s_%s_DE.tsv", name_prefix, tag))
       write.table(te_df, out_te, sep="\t", quote=FALSE, row.names=FALSE)
       cat(sprintf("[INF] Written: %s\n", basename(out_te)))
+      # Standardized alias for interaction coefficient only
+      if (coef == interact_coef) {
+        std_te <- file.path(opt$outdir, sprintf("%s_%s_DE.tsv", name_prefix, std_comp))
+        if (normalizePath(std_te) != normalizePath(out_te)) {
+          write.table(te_df, std_te, sep="\t", quote=FALSE, row.names=FALSE)
+          cat(sprintf("[INF] Standardized alias: %s\n", basename(std_te)))
+        }
+      }
     }
   }
 
@@ -321,20 +347,16 @@ if (opt$mode == "interaction") {
     cat("[WRN] VST failed, using rlog\n"); rlog(dds_int, blind=FALSE)
   })
   pca_int <- prcomp(t(assay(vsd_int)), scale.=FALSE)
+  var_exp <- round(100 * pca_int$sdev^2 / sum(pca_int$sdev^2), 1)
   pca_df  <- data.frame(
     sample_id  = rownames(pca_int$x),
     PC1        = pca_int$x[, 1],
     PC2        = pca_int$x[, 2],
-    fraction   = coldata[rownames(pca_int$x), frac_col],
-    phase      = coldata[rownames(pca_int$x), phase_col]
+    condition  = coldata[rownames(pca_int$x), frac_col],
+    phase      = coldata[rownames(pca_int$x), phase_col],
+    PC1_var    = var_exp[1],
+    PC2_var    = var_exp[2]
   )
-  var_exp <- round(100 * pca_int$sdev^2 / sum(pca_int$sdev^2), 1)
-  colnames(pca_df)[3:4] <- c(sprintf("PC1_var%.1f", var_exp[1]),
-                              sprintf("PC2_var%.1f", var_exp[2]))
-  colnames(pca_df)[3] <- "PC1"
-  colnames(pca_df)[4] <- "PC2"
-  pca_df$PC1_var <- var_exp[1]
-  pca_df$PC2_var <- var_exp[2]
   write.table(pca_df, file.path(opt$outdir, "pca_coordinates.tsv"),
               sep="\t", row.names=FALSE, quote=FALSE)
   cat("[INF] PCA coordinates saved.\n")

@@ -1022,6 +1022,7 @@ class ModuleRunner:
                 "--phase-col",     "phase",
                 "--ref-fraction",  comp_cfg.get("ref_fraction", "totRNA"),
                 "--ref-phase",     comp_cfg.get("ref_phase", "interphase"),
+                "--comparison",    comparison,
             ]
         else:
             deseq2_args = [
@@ -1122,22 +1123,36 @@ class ModuleRunner:
 
     def _run_m14_report(self, comparison: str = None) -> bool:
         cfg  = self.cfg
+        thresholds = cfg.thresholds
+        out_dir = self._comparison_dir(comparison) / "report"
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Interaction comparison → use dedicated interaction report QMD
+        # Interaction comparison → unified template with comparison_type=interaction
         if self._is_interaction_comparison(comparison):
-            out_dir = self._comparison_dir(comparison) / "report"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            interaction_qmd = self.scripts / "m14_interaction_report.qmd"
-            if not interaction_qmd.exists():
-                warn(f"[SKIP] {interaction_qmd} not found — skipping interaction report")
-                return False
-            thresholds = cfg.thresholds
+            comp_cfg = next(
+                (c for c in cfg.comparisons if c.get("name") == comparison), {}
+            ) if hasattr(cfg, "comparisons") else {}
+            # Derive meaningful treatment/control labels for axis labels
+            # treatment = chromatin fraction in mitosis; control = reference
+            frac_of_interest = comp_cfg.get("fraction_of_interest", "ChaRNA")
+            treatment_label  = f"mito-{frac_of_interest}"
+            control_label    = frac_of_interest
+            phase_file = str(
+                self._comparison_dir(comparison) / "deseq2" /
+                f"genes_{comparison}_phase_effect_DE.tsv"
+            )
             ret = run_cmd([
                 "quarto", "render",
-                "m14_interaction_report.qmd",  # relative path — CWD is self.scripts
+                "m14_report.qmd",
                 "-P", f"out_dir:{self.out}",
+                "-P", f"comparison:{comparison}",
+                "-P", f"treatment:{treatment_label}",
+                "-P", f"control:{control_label}",
                 "-P", f"padj_threshold:{thresholds.padj}",
                 "-P", f"lfc_threshold:{thresholds.lfc}",
+                "-P", f"coldata_path:{cfg.samples.coldata}",
+                "-P", "comparison_type:interaction",
+                "-P", f"phase_effect_file:{phase_file}",
                 "--output-dir", str(out_dir),
             ], cwd=self.scripts, log_file=self._log("m14_report", comparison))
             return ret == 0
@@ -1147,15 +1162,6 @@ class ModuleRunner:
             return False
 
         treatment, control = comp
-        out_dir = self._comparison_dir(comparison) / "report"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        # Determine out_dir for report (comparison-specific)
-        comp_out = self._comparison_dir(comparison)
-
-        thresholds = cfg.thresholds
-        # out_dir = main output dir where all module results live
-        # report output goes into comparison subdir
         main_out = self.out
         ret = run_cmd([
             "quarto", "render",
@@ -1337,9 +1343,15 @@ class ModuleRunner:
     def _run_m11d_te_de(self, comparison=None) -> bool:
         cfg      = self.cfg
         comp     = self._parse_comparison(comparison)
+        # Interaction comparisons: use fraction_of_interest as treatment, its base as control
         if not comp:
-            return False
-        treatment, control = comp
+            if not self._is_interaction_comparison(comparison):
+                return False
+            comp_cfg = self._get_comparison_config(comparison)
+            frac = comp_cfg.get("fraction_of_interest", "ChaRNA") if comp_cfg else "ChaRNA"
+            treatment, control = f"mito-{frac}", frac
+        else:
+            treatment, control = comp
         comp_dir = self._comparison_dir(comparison)
         out_dir  = comp_dir / "m11d"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -1374,11 +1386,16 @@ class ModuleRunner:
         stranded = "no" if strand == "unstranded" else (
             "reverse" if strand == "RF" else "yes")
 
+        # Use the processed 6-col BED (m11/rmsk_hg38.bed), NOT the raw UCSC gz
+        rmsk_hg38_bed = self.out / "m11" / "rmsk_hg38.bed"
+        if not rmsk_hg38_bed.exists():
+            warn(f"rmsk_hg38.bed not found at {rmsk_hg38_bed} — run M11 first")
+            return False
         return run_cmd([
             sys.executable, str(self.scripts / "m12_te_locus.py"),
             "locus-count",
             "--bam-dir",  str(bam_dir),
-            "--rmsk-bed", str(Path(cfg.databases.rmsk_bed)),
+            "--rmsk-bed", str(rmsk_hg38_bed),
             "--outdir",   str(out_dir),
         ], log_file=self._log("m12_tetranscripts")) == 0
 
@@ -1388,9 +1405,9 @@ class ModuleRunner:
     def _run_m10_go(self, comparison=None) -> bool:
         cfg  = self.cfg
         comp = self._parse_comparison(comparison)
-        if not comp:
+        # Interaction comparisons don't have treatment/control; still run GO
+        if not comp and not self._is_interaction_comparison(comparison):
             return False
-        treatment, control = comp
         comp_dir = self._comparison_dir(comparison)
         de_file  = comp_dir / "deseq2" / f"genes_{comparison}_DE.tsv"
         if not de_file.exists():
@@ -1401,9 +1418,10 @@ class ModuleRunner:
         comp_dir = self._comparison_dir(comparison)
         all_genes = comp_dir / "deseq2" / "all_genes_counts.tsv"
         te_de     = comp_dir / "deseq2" / f"TE_{comparison}_DE.tsv"
-        te_host   = self.out / "m11" / "te_host_universe.txt"
-        te_host_g = self.out / "m11" / "te_host_genes.tsv"
-        gene_map  = self.out / "integrated" / "gene_type_map.tsv"
+        te_host       = self.out / "m11" / "te_host_universe.txt"
+        te_host_g     = self.out / "m11" / "te_host_genes.tsv"
+        te_prom_int   = self.out / "m11b" / "te_promoter_intersect.bed"
+        gene_map      = self.out / "integrated" / "gene_type_map.tsv"
 
         args = [
             "--de-genes",      str(de_file),
@@ -1419,6 +1437,8 @@ class ModuleRunner:
             args += ["--te-host-universe", str(te_host)]
         if te_host_g.exists():
             args += ["--te-host-genes", str(te_host_g)]
+        if te_prom_int.exists():
+            args += ["--te-promoter-intersect", str(te_prom_int)]
 
         return run_r_script(self.scripts / "m10_go.R", args,
                             log_file=self._log("m10_go", comparison)) == 0
@@ -1428,12 +1448,14 @@ class ModuleRunner:
     def _run_m16_stringtie(self, comparison=None) -> bool:
         cfg     = self.cfg
         bam_dir = self.out / "mapping" / "bam"
-        out_dir = self.out / "m16_stringtie"
+        out_dir = self.out / "m16_stringtie"        # global: assembly + merge
         out_dir.mkdir(parents=True, exist_ok=True)
         comp    = self._parse_comparison(comparison)
         if not comp:
             return False
         treatment, control = comp
+        de_dir  = self._comparison_dir(comparison) / "m16_stringtie"  # per-comparison DE
+        de_dir.mkdir(parents=True, exist_ok=True)
 
         # StringTie per-sample assembly
         gtf = Path(cfg.databases.gtf)
@@ -1471,13 +1493,13 @@ class ModuleRunner:
                      str(merged_gtf)],
                     log_file=self._log("m16_gffcmp"))
 
-        # DE analysis
+        # DE analysis — results go to per-comparison dir; assembly files from global dir
         tmap       = out_dir / "gffcmp.merged.gtf.tmap"
         novel_tmap = out_dir / "novel_transcripts.tmap"
         args = [
             "--st-dir",    str(out_dir),
             "--coldata",   str(self._write_coldata(comparison)),
-            "--outdir",    str(out_dir),
+            "--outdir",    str(de_dir),
             "--treatment", treatment,
             "--control",   control,
             "--padj",      str(cfg.thresholds.padj),
@@ -1519,12 +1541,12 @@ class ModuleRunner:
     def _run_m19_editing(self, comparison=None) -> bool:
         cfg     = self.cfg
         bam_dir = self.out / "mapping" / "bam"
-        out_dir = self.out / "m19_editing"
-        out_dir.mkdir(parents=True, exist_ok=True)
         comp    = self._parse_comparison(comparison)
         if not comp:
             return False
         treatment, control = comp
+        out_dir = self._comparison_dir(comparison) / "m19_editing"
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         normal_bams = self._get_condition_bams(control)
         tumor_bams  = self._get_condition_bams(treatment)
@@ -1541,7 +1563,7 @@ class ModuleRunner:
             "--min-cov",    str(cfg.thresholds.min_cov_editing),
             "--min-score",  str(cfg.thresholds.min_score_editing),
             "--min-ef",     str(cfg.thresholds.min_ef_editing),
-        ], cwd=self.scripts.parent, log_file=self._log("m19_editing"))
+        ], cwd=self.scripts.parent, log_file=self._log("m19_editing", comparison))
         if ret != 0:
             return False
 
@@ -1551,7 +1573,7 @@ class ModuleRunner:
             "--outdir",      str(out_dir),
             "--treatment",   treatment,
             "--control",     control,
-        ], log_file=self._log("m19_editing_r")) == 0
+        ], log_file=self._log("m19_editing_r", comparison)) == 0
 
     # ── M20: Metatranscriptomics (Kraken2/Bracken) ──────────────────────────
 

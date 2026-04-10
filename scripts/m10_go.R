@@ -47,6 +47,8 @@ option_list <- list(
               help="te_host_universe.txt from M11 (one gene_id per line)"),
   make_option("--te-host-genes",   type="character", default=NULL,
               help="te_host_genes.tsv from M11 (for DE gene filtering)"),
+  make_option("--te-promoter-intersect", type="character", default=NULL,
+              help="te_promoter_intersect.bed from M11b (col4=TE_name, col10=gene_id)"),
   make_option("--gene-type-map",type="character", help="gene_type_map.tsv"),
   make_option("--organism",     type="character", default="human",
               help="human|mouse|rat|zebrafish [default: human]"),
@@ -370,22 +372,49 @@ if (!is.null(opt[["te-de"]]) && file.exists(opt[["te-de"]])) {
   te_host_universe_entrez <- unique(te_host_uni_map$ENTREZID)
 
   # ── TE host DE genes ─────────────────────────────────────────────────────────
+  # Filter de_gene_ids to SIGNIFICANT DE genes only (padj < threshold)
+  # This is essential: using all tested genes (including non-significant) as
+  # foreground would make it larger than the background, breaking enrichGO.
+  sig_mask <- !is.na(de_genes_df$padj) & de_genes_df$padj < opt$padj
+  sig_de_ids <- de_gene_ids[sig_mask]
+  cat(sprintf("[INF] Significant DE genes (padj<%.2f): %d / %d\n",
+              opt$padj, length(sig_de_ids), length(de_gene_ids)))
+
   # Use M11 te_host_genes.tsv to restrict DE genes to actual TE-hosting genes
+  # Foreground = sig DE genes hosting ≥1 SIGNIFICANTLY DE TE family
   if (!is.null(opt[["te-host-genes"]]) &&
       file.exists(opt[["te-host-genes"]])) {
 
     cat("[INF] Using M11 te_host_genes.tsv for DE gene filtering.\n")
-    te_host_df    <- read.table(opt[["te-host-genes"]], header=TRUE, sep="\t",
-                                check.names=FALSE)
-    host_gene_ids <- te_host_df$gene_id
+    te_host_df <- read.table(opt[["te-host-genes"]], header=TRUE, sep="\t",
+                             check.names=FALSE)
 
-    te_host_de_ids <- de_gene_ids[de_gene_ids %in% host_gene_ids]
-    cat(sprintf("[INF] DE genes that are TE hosts: %d / %d\n",
-                length(te_host_de_ids), length(de_gene_ids)))
+    if (nrow(sig_te) > 0 && "te_families" %in% colnames(te_host_df)) {
+      # Filter to genes hosting ≥1 significantly DE TE family
+      sig_te_families <- sig_te$family_id
+      hosts_de_te <- vapply(strsplit(te_host_df$te_families, ","), function(fams) {
+        any(trimws(fams) %in% sig_te_families)
+      }, logical(1))
+      host_gene_ids <- te_host_df$gene_id[hosts_de_te]
+      cat(sprintf("[INF] Genes hosting ≥1 DE TE family: %d / %d (sig TE families: %d)\n",
+                  length(host_gene_ids), nrow(te_host_df), length(sig_te_families)))
+    } else if (nrow(sig_te) == 0) {
+      cat("[INF] No significantly DE TE families — TE host GO foreground will be empty.\n")
+      host_gene_ids <- character(0)
+    } else {
+      # te_families column missing: fall back to any TE host
+      host_gene_ids <- te_host_df$gene_id
+      cat(sprintf("[WRN] te_families column missing — using all TE hosts: %d genes\n",
+                  length(host_gene_ids)))
+    }
+
+    te_host_de_ids <- sig_de_ids[sig_de_ids %in% host_gene_ids]
+    cat(sprintf("[INF] Significant DE genes hosting ≥1 DE TE family: %d / %d\n",
+                length(te_host_de_ids), length(sig_de_ids)))
 
   } else {
-    cat("[WRN] M11 te_host_genes.tsv not provided — using all DE protein_coding.\n")
-    te_host_de_ids <- de_gene_ids[de_gene_ids %in%
+    cat("[WRN] M11 te_host_genes.tsv not provided — using significant DE protein_coding.\n")
+    te_host_de_ids <- sig_de_ids[sig_de_ids %in%
                                    gene_type_map$gene_id[
                                      gene_type_map$gene_type == "protein_coding"]]
   }
@@ -400,6 +429,108 @@ if (!is.null(opt[["te-de"]]) && file.exists(opt[["te-de"]])) {
   } else {
     cat(sprintf("[WRN] Too few DE TE-host genes (%d). Skipping TE host GO.\n",
                 length(te_host_de_ids)))
+  }
+
+  # ── 4. TE carrier genes GO ORA (body + promoter, regardless of gene DE) ────
+  # Foreground = ALL expressed genes harboring ≥1 DE TE family in gene body OR
+  # promoter (2kb upstream), regardless of whether the gene itself is DE.
+  # Rationale: TE differential expression may point to genes and functions that
+  # escape traditional DE analysis. This analysis is complementary to the TE host
+  # GO (section 4.2 of the report) which requires genes to also be DE.
+  cat("\n--- TE carrier genes GO ORA (body+promoter, regardless of gene DE) ---\n")
+
+  carrier_ids      <- character(0)
+  prom_carrier_ids <- character(0)
+
+  if (nrow(sig_te) > 0) {
+    sig_te_fams_carrier <- sig_te$family_id
+
+    # ── Gene body carriers ────────────────────────────────────────────────────
+    if (!is.null(opt[["te-host-genes"]]) && file.exists(opt[["te-host-genes"]])) {
+      if (!exists("te_host_df")) {
+        te_host_df <- read.table(opt[["te-host-genes"]], header=TRUE, sep="\t",
+                                 check.names=FALSE)
+      }
+      if ("te_families" %in% colnames(te_host_df)) {
+        carries_body <- vapply(strsplit(te_host_df$te_families, ","), function(fams) {
+          any(trimws(fams) %in% sig_te_fams_carrier)
+        }, logical(1))
+        carrier_ids <- te_host_df$gene_id[carries_body]
+        carrier_ids <- carrier_ids[carrier_ids %in% universe_ids]
+        cat(sprintf("[INF] Body carrier genes (≥1 DE TE family in body): %d\n",
+                    length(carrier_ids)))
+      } else {
+        cat("[WRN] te_families column missing — body carrier genes not derived.\n")
+      }
+    }
+
+    # ── Promoter carriers ─────────────────────────────────────────────────────
+    # Derive from te_promoter_intersect.bed: col4=TE_name (family|class|type), col10=gene_id
+    if (!is.null(opt[["te-promoter-intersect"]]) &&
+        file.exists(opt[["te-promoter-intersect"]])) {
+      cat("[INF] Reading te_promoter_intersect.bed for promoter carrier genes...\n")
+      prom_bed <- tryCatch(
+        read.table(opt[["te-promoter-intersect"]], header=FALSE, sep="\t",
+                   check.names=FALSE, stringsAsFactors=FALSE,
+                   quote="", fill=TRUE, comment.char=""),
+        error=function(e) { cat("[WRN] Failed to read promoter intersect:", e$message, "\n"); NULL }
+      )
+      if (!is.null(prom_bed) && ncol(prom_bed) >= 10) {
+        prom_df <- data.frame(
+          te_name = prom_bed[[4]],
+          gene_id = prom_bed[[10]],
+          stringsAsFactors=FALSE
+        )
+        # Family name = part before first "|"
+        prom_df$family_id <- sub("\\|.*", "", prom_df$te_name)
+        prom_carrier_ids <- unique(prom_df$gene_id[prom_df$family_id %in% sig_te_fams_carrier])
+        prom_carrier_ids <- prom_carrier_ids[prom_carrier_ids %in% universe_ids]
+        cat(sprintf("[INF] Promoter carrier genes (≥1 DE TE family in promoter): %d\n",
+                    length(prom_carrier_ids)))
+      }
+    }
+
+    # ── Body-only ORA ────────────────────────────────────────────────────────
+    if (length(carrier_ids) >= 5) {
+      body_map <- ensembl_to_entrez(carrier_ids, org_db)
+      run_ora(unique(body_map$ENTREZID),
+              te_host_universe_entrez,
+              "TE_carrier_body",
+              opt$outdir, org_db, opt$padj, opt[["min-gs"]], opt[["max-gs"]])
+    } else {
+      cat(sprintf("[WRN] Too few body carrier genes (%d). Skipping body carrier GO.\n",
+                  length(carrier_ids)))
+    }
+
+    # ── Promoter-only ORA ────────────────────────────────────────────────────
+    if (length(prom_carrier_ids) >= 5) {
+      prom_map <- ensembl_to_entrez(prom_carrier_ids, org_db)
+      run_ora(unique(prom_map$ENTREZID),
+              te_host_universe_entrez,
+              "TE_carrier_promoter",
+              opt$outdir, org_db, opt$padj, opt[["min-gs"]], opt[["max-gs"]])
+    } else {
+      cat(sprintf("[WRN] Too few promoter carrier genes (%d). Skipping promoter carrier GO.\n",
+                  length(prom_carrier_ids)))
+    }
+
+    # ── Combined body + promoter ──────────────────────────────────────────────
+    combined_carrier_ids <- unique(c(carrier_ids, prom_carrier_ids))
+    cat(sprintf("[INF] Combined carrier genes (body OR promoter): %d\n",
+                length(combined_carrier_ids)))
+
+    if (length(combined_carrier_ids) >= 5) {
+      carrier_map <- ensembl_to_entrez(combined_carrier_ids, org_db)
+      run_ora(unique(carrier_map$ENTREZID),
+              te_host_universe_entrez,
+              "TE_carrier",
+              opt$outdir, org_db, opt$padj, opt[["min-gs"]], opt[["max-gs"]])
+    } else {
+      cat(sprintf("[WRN] Too few carrier genes (%d body+promoter). Skipping TE carrier GO.\n",
+                  length(combined_carrier_ids)))
+    }
+  } else {
+    cat("[INF] No significantly DE TE families — skipping TE carrier GO.\n")
   }
 }
 

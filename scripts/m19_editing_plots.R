@@ -244,4 +244,112 @@ if (!is.null(summary_t)) {
   print(summary_t, row.names=FALSE)
 }
 
+# ── 7. All editing types (C→U/APOBEC, G→A, etc.) ─────────────────────────────
+all_edits <- safe_read(file.path(opt[["editing-dir"]], "editing_sites_all.tsv"))
+
+if (!is.null(all_edits) && nrow(all_edits) > 0 && "mutation_type" %in% colnames(all_edits)) {
+  cat(sprintf("[INF] All-type editing sites: %d across %d types\n",
+              nrow(all_edits),
+              length(unique(all_edits$mutation_type))))
+
+  # canonical 6-substitution grouping (pyrimidine base)
+  canonical_map <- c(
+    "A>G"="A>G (A-to-I)",  "T>C"="A>G (A-to-I)",   # ADAR
+    "C>T"="C>T (APOBEC)",  "G>A"="C>T (APOBEC)",    # APOBEC3/AID
+    "C>G"="C>G",           "G>C"="C>G",
+    "C>A"="C>A",           "G>T"="C>A",
+    "T>A"="T>A",           "A>T"="T>A",
+    "T>G"="T>G",           "A>C"="T>G"
+  )
+  type_colors <- c(
+    "A>G (A-to-I)"  = "#1F77B4",
+    "C>T (APOBEC)"  = "#FF7F0E",
+    "C>G"           = "#2CA02C",
+    "C>A"           = "#D62728",
+    "T>A"           = "#9467BD",
+    "T>G"           = "#8C564B"
+  )
+
+  all_edits <- all_edits |>
+    mutate(canonical = canonical_map[mutation_type],
+           canonical = ifelse(is.na(canonical), mutation_type, canonical))
+
+  # 7a. Mutation spectrum barplot
+  type_counts <- all_edits |>
+    count(mutation_type, canonical) |>
+    arrange(desc(n))
+
+  p_spectrum <- ggplot(type_counts,
+                       aes(x=reorder(mutation_type, n), y=n, fill=canonical)) +
+    geom_col(width=0.7) +
+    coord_flip() +
+    scale_fill_manual(values=type_colors, name="Substitution class") +
+    labs(
+      title="RNA editing mutation spectrum (all types)",
+      subtitle=sprintf("Total sites: %s | treatment=%s vs control=%s",
+                       format(nrow(all_edits), big.mark=","),
+                       opt$treatment, opt$control),
+      x="Mutation type", y="Number of sites"
+    ) +
+    theme_minimal(base_size=13) +
+    theme(legend.position="right")
+
+  ggsave(file.path(outdir, "editing_spectrum.pdf"), p_spectrum, width=8, height=6)
+  ggsave(file.path(outdir, "editing_spectrum.png"), p_spectrum, width=8, height=6, dpi=150)
+  cat("[OK] editing_spectrum.png\n")
+
+  # 7b. dEF violin per canonical class (classes with >= 5 sites)
+  min_for_violin <- 5L
+  cls_ok <- all_edits |>
+    count(canonical) |>
+    filter(n >= min_for_violin) |>
+    pull(canonical)
+
+  if (length(cls_ok) >= 2) {
+    violin_df <- all_edits |>
+      filter(canonical %in% cls_ok) |>
+      mutate(canonical = factor(canonical, levels=names(type_colors)[names(type_colors) %in% cls_ok]))
+
+    p_violin <- ggplot(violin_df, aes(x=canonical, y=dEF, fill=canonical)) +
+      geom_violin(trim=TRUE, alpha=0.7, scale="width") +
+      geom_boxplot(width=0.12, fill="white", outlier.shape=NA) +
+      geom_hline(yintercept=0, linetype="dashed", color="grey40") +
+      scale_fill_manual(values=type_colors, name=NULL) +
+      labs(
+        title="Differential editing frequency (dEF) by substitution class",
+        subtitle=sprintf("dEF = EF(%s) − EF(%s) | only classes with ≥%d sites",
+                         opt$treatment, opt$control, min_for_violin),
+        x=NULL, y=sprintf("dEF (%s − %s)", opt$treatment, opt$control)
+      ) +
+      theme_minimal(base_size=13) +
+      theme(legend.position="none",
+            axis.text.x=element_text(angle=25, hjust=1))
+
+    ggsave(file.path(outdir, "editing_dEF_by_class.pdf"), p_violin, width=9, height=6)
+    ggsave(file.path(outdir, "editing_dEF_by_class.png"), p_violin, width=9, height=6, dpi=150)
+    cat("[OK] editing_dEF_by_class.png\n")
+  }
+
+  # 7c. Summary TSV per canonical class
+  class_summary <- all_edits |>
+    group_by(canonical, mutation_type) |>
+    summarise(
+      n_sites        = n(),
+      mean_EF_ctrl   = round(mean(EF1, na.rm=TRUE), 4),
+      mean_EF_treat  = round(mean(EF2, na.rm=TRUE), 4),
+      mean_dEF       = round(mean(dEF, na.rm=TRUE), 4),
+      n_increased    = sum(dEF >  opt[["min-def"]], na.rm=TRUE),
+      n_decreased    = sum(dEF < -opt[["min-def"]], na.rm=TRUE),
+      .groups="drop"
+    ) |>
+    arrange(desc(n_sites))
+
+  write_tsv(class_summary,
+            file.path(outdir, "editing_type_summary.tsv"))
+  cat("[OK] editing_type_summary.tsv\n")
+
+} else {
+  cat("[WARN] editing_sites_all.tsv not found or empty — skipping all-types plots\n")
+}
+
 cat("[OK] M19 editing plots complete. Output:", outdir, "\n")

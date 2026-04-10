@@ -252,57 +252,68 @@ def locus_count(
 
     print(f"  Loci loaded: {n_loci:,}", file=sys.stderr)
 
-    # Count reads per locus per sample
-    # For efficiency: iterate BAM pileup per chrom, intersect with loci
-    locus_counts: dict[str, dict[str, int]] = defaultdict(
-        lambda: {sid: 0 for sid in sample_ids}
-    )
+    # Count reads per locus per sample using bedtools multicov.
+    # This is a sweep-line algorithm → orders of magnitude faster than pysam loops.
+    import subprocess as _sp
+    import tempfile as _tmp
 
-    for bam_path, sample_id in zip(bam_files, sample_ids):
-        print(f"  Counting {sample_id}...", file=sys.stderr)
-        bam = pysam.AlignmentFile(str(bam_path), "rb")
+    print(f"  Running bedtools multicov on {len(bam_files)} BAMs...", file=sys.stderr)
 
-        for chrom, loci in loci_by_chrom.items():
-            try:
-                for read in bam.fetch(chrom):
-                    if read.is_unmapped:
-                        continue
-                    if read.mapping_quality < min_mapq:
-                        continue
-                    if read.is_duplicate:
-                        continue
+    # Build a minimal BED3+name+score+strand from the loaded loci (preserve locus_id)
+    bed_tmp = _tmp.NamedTemporaryFile(mode="w", suffix=".bed", delete=False)
+    bed_tmp_path = Path(bed_tmp.name)
+    for chrom, loci in sorted(loci_by_chrom.items()):
+        for start, end, locus_id, name in loci:
+            strand = locus_id.split("_")[-1]
+            bed_tmp.write(f"{chrom}\t{start}\t{end}\t{locus_id}\t0\t{strand}\n")
+    bed_tmp.close()
 
-                    rstart = read.reference_start
-                    rend   = read.reference_end or rstart + 1
+    multicov_cmd = [
+        "bedtools", "multicov",
+        "-bams", *[str(b) for b in bam_files],
+        "-bed", str(bed_tmp_path),
+        "-q", str(min_mapq),
+        "-D",   # count duplicate reads
+        "-s",   # strand-specific (match strand)
+    ]
+    result = _sp.run(multicov_cmd, capture_output=True, text=True)
+    bed_tmp_path.unlink(missing_ok=True)
 
-                    # Check overlap with each locus on this chrom
-                    for lstart, lend, locus_id, _ in loci:
-                        if rstart < lend and rend > lstart:
-                            locus_counts[locus_id][sample_id] += 1
-                            break  # count each read once (first overlapping locus)
-            except (ValueError, KeyError):
-                pass  # chrom not in BAM
+    if result.returncode != 0:
+        # Fallback: retry without strand specificity
+        print("  bedtools multicov failed with -s, retrying without strand filter...",
+              file=sys.stderr)
+        multicov_cmd_ns = [c for c in multicov_cmd if c != "-s"]
+        result = _sp.run(multicov_cmd_ns, capture_output=True, text=True)
 
-        bam.close()
+    if result.returncode != 0:
+        raise RuntimeError(f"bedtools multicov failed:\n{result.stderr}")
 
-    # Write output
+    # Parse output: chrom, start, end, locus_id, 0, strand, count1, count2, ...
     out_tsv = out_dir / "locus_counts.tsv"
+    n_expressed = 0
     with open(out_tsv, "w", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t")
         writer.writerow(["locus_id", "te_name", "chrom", "start", "end",
                          "strand"] + sample_ids)
+        for line in result.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 6 + len(bam_files):
+                continue
+            chrom_out = parts[0]
+            start_out = parts[1]
+            end_out   = parts[2]
+            locus_id  = parts[3]
+            strand_out = parts[5]
+            counts    = [int(x) for x in parts[6:6 + len(bam_files)]]
+            if sum(counts) == 0:
+                continue
+            # Extract te_name from locus_id (format: name_chrom_start_end_strand)
+            te_name = locus_id.rsplit("_", 4)[0]
+            writer.writerow([locus_id, te_name, chrom_out, start_out, end_out,
+                             strand_out] + counts)
+            n_expressed += 1
 
-        for chrom, loci in sorted(loci_by_chrom.items()):
-            for start, end, locus_id, name in loci:
-                nparts = name.split("|")
-                te_name = nparts[0]
-                strand  = locus_id.split("_")[-1]
-                counts  = [locus_counts[locus_id][sid] for sid in sample_ids]
-                if sum(counts) > 0:  # only write expressed loci
-                    writer.writerow([locus_id, te_name, chrom, start, end,
-                                     strand] + counts)
-
-    n_expressed = sum(1 for c in locus_counts.values() if sum(c.values()) > 0)
     print(f"  Expressed loci: {n_expressed:,}", file=sys.stderr)
     print(f"  Written: {out_tsv}", file=sys.stderr)
 

@@ -29,6 +29,8 @@ library(knitr)
 library(kableExtra)
 library(pheatmap)
 library(DT)
+has_go_pkgs <- requireNamespace("clusterProfiler", quietly=TRUE) &&
+              requireNamespace("org.Hs.eg.db",    quietly=TRUE)
 
 p        <- params
 out      <- p$out_dir
@@ -288,6 +290,115 @@ if (!is.null(int_sig) && nrow(int_sig) > 0 && !is.null(norm_counts)) {
     )
   }
 } else cat("Heatmap not available.\n")
+```
+
+## Biological Interpretation
+
+> **What the interaction term measures:**
+> The coefficient `fractionChaRNA:phasemitosis` captures genes that change **differently in chromatin-associated RNA (ChaRNA) during mitosis** compared to total RNA. This is not simply "mitosis-regulated" genes — those are captured by the `phasemitosis` marginal effect (Section 4). Rather, it isolates **chromatin-specific** dynamics: genes whose association with chromatin increases or decreases during mitosis beyond what would be expected from global transcriptional changes.
+>
+> **Positive interaction (LFC > 0) — "ChaRNA-enriched in mitosis":**
+> These transcripts are proportionally more abundant in the chromatin fraction during mitosis than in interphase, or more so than in total RNA. Possible mechanisms: selective retention on condensing chromosomes, reduced nucleoplasmic release, or protection from mitotic transcriptional silencing in specific chromatin domains.
+>
+> **Negative interaction (LFC < 0) — "ChaRNA-depleted in mitosis":**
+> These transcripts are evicted from chromatin during mitosis. Possible mechanisms: condensation-driven displacement, active removal by chromatin remodellers, or redistribution to the cytoplasm during nuclear envelope breakdown.
+>
+> **Reference condition:** `totRNA / interphase`. The model formula is `~ fraction + phase + fraction:phase` with `totRNA` and `interphase` as the reference levels.
+
+## GO Enrichment — Interaction Genes
+
+```{r go-interaction, fig.height=7, fig.width=10}
+if (!is.null(int_sig) && nrow(int_sig) > 0 &&
+    exists("gene_names_int") && length(gene_names_int) > 0 &&
+    isTRUE(has_go_pkgs)) {
+
+  # Use full namespaces to avoid masking dplyr::select with AnnotationDbi::select
+  OrgDb <- org.Hs.eg.db::org.Hs.eg.db
+
+  sig_ids_base <- sub("\\..*", "", int_sig$gene_id)
+  sig_syms     <- gene_names_int[sig_ids_base]
+  sig_syms     <- unique(sig_syms[!is.na(sig_syms) & nzchar(sig_syms)])
+
+  all_ids_base <- sub("\\..*", "", int_full$gene_id)
+  all_syms     <- gene_names_int[all_ids_base]
+  all_syms     <- unique(all_syms[!is.na(all_syms) & nzchar(all_syms)])
+
+  cat(sprintf("GO enrichment on %d significant interaction genes (%d with gene symbols) vs %d background.\n",
+              nrow(int_sig), length(sig_syms), length(all_syms)))
+
+  eg_sig <- tryCatch(clusterProfiler::bitr(sig_syms, fromType="SYMBOL", toType="ENTREZID",
+                                            OrgDb=OrgDb, drop=TRUE), error=function(e) NULL)
+  eg_bg  <- tryCatch(clusterProfiler::bitr(all_syms, fromType="SYMBOL", toType="ENTREZID",
+                                            OrgDb=OrgDb, drop=TRUE), error=function(e) NULL)
+
+  if (!is.null(eg_sig) && nrow(eg_sig) >= 3 && !is.null(eg_bg)) {
+    go_bp <- tryCatch(
+      clusterProfiler::enrichGO(gene=eg_sig$ENTREZID, universe=eg_bg$ENTREZID,
+               OrgDb=OrgDb, ont="BP",
+               pAdjustMethod="BH", pvalueCutoff=0.2, readable=TRUE),
+      error=function(e) { cat("[WARN] GO BP:", conditionMessage(e), "\n"); NULL })
+
+    if (!is.null(go_bp) && sum(go_bp@result$p.adjust < 0.2, na.rm=TRUE) > 0) {
+      res_bp <- go_bp@result[go_bp@result$p.adjust < 0.2, ]
+      res_bp <- res_bp[order(res_bp$p.adjust), ][seq_len(min(20, nrow(res_bp))), ]
+      p_go <- ggplot(res_bp,
+                     aes(x=reorder(Description, -log10(p.adjust)),
+                         y=-log10(p.adjust), fill=-log10(p.adjust))) +
+        geom_col(alpha=0.85) +
+        coord_flip() +
+        scale_fill_gradient(low="#AED6F1", high="#1A5276") +
+        labs(title="GO Biological Process — Interaction genes (ChaRNA-specific in mitosis)",
+             subtitle=sprintf("padj<0.2 | %d significant genes / %d background",
+                              length(sig_syms), length(all_syms)),
+             x=NULL, y="-log10(padj)", fill="-log10(padj)") +
+        theme_minimal(base_size=12) + theme(legend.position="none")
+      print(p_go)
+
+      tbl_bp <- data.frame(
+        Description = res_bp$Description,
+        GeneRatio   = res_bp$GeneRatio,
+        padj        = formatC(res_bp$p.adjust, digits=3, format="g"),
+        Count       = res_bp$Count,
+        Genes       = ifelse(nchar(res_bp$geneID)>60,
+                             paste0(substr(res_bp$geneID,1,60),"..."),
+                             res_bp$geneID)
+      )
+      knitr::kable(tbl_bp,
+        caption="GO BP enrichment — ChaRNA-specific interaction genes (top 20, padj<0.2)") |>
+        print()
+    } else {
+      cat("GO BP: no terms at padj<0.2 for the interaction gene set.\n")
+      cat("This is common with small gene sets and the stringent interaction model.\n")
+    }
+
+    go_mf <- tryCatch(
+      clusterProfiler::enrichGO(gene=eg_sig$ENTREZID, universe=eg_bg$ENTREZID,
+               OrgDb=OrgDb, ont="MF",
+               pAdjustMethod="BH", pvalueCutoff=0.2, readable=TRUE),
+      error=function(e) NULL)
+    if (!is.null(go_mf) && sum(go_mf@result$p.adjust < 0.2, na.rm=TRUE) > 0) {
+      res_mf <- go_mf@result[go_mf@result$p.adjust < 0.2, ]
+      res_mf <- res_mf[order(res_mf$p.adjust), ][seq_len(min(10, nrow(res_mf))), ]
+      cat("\n**GO Molecular Function (top 10):**\n")
+      tbl_mf <- data.frame(
+        Description = res_mf$Description,
+        GeneRatio   = res_mf$GeneRatio,
+        padj        = formatC(res_mf$p.adjust, digits=3, format="g"),
+        Count       = res_mf$Count
+      )
+      knitr::kable(tbl_mf) |> print()
+    }
+  } else {
+    cat(sprintf("Too few genes with ENTREZID mapping (%d) for GO enrichment.\n",
+                if (!is.null(eg_sig)) nrow(eg_sig) else 0))
+  }
+} else if (is.null(int_sig) || nrow(int_sig) == 0) {
+  cat("No significant interaction genes — GO enrichment not applicable.\n")
+} else if (!isTRUE(has_go_pkgs)) {
+  cat("GO enrichment requires clusterProfiler and org.Hs.eg.db packages.\n")
+} else {
+  cat("Gene name lookup not available — GO enrichment skipped.\n")
+}
 ```
 
 ---
