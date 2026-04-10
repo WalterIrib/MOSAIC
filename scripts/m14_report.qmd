@@ -215,11 +215,20 @@ m23_dir <- {
   d_leg  <- file.path(out, "m23_te_insertions")
   if (dir.exists(d_comp)) d_comp else d_leg
 }
-te_clusters     <- tryCatch(
+te_clusters_raw <- tryCatch(
   read.table(file.path(m23_dir, "te_insertion_clusters.tsv"),
              header=TRUE, sep="\t", stringsAsFactors=FALSE, fill=TRUE,
              check.names=FALSE, quote="", comment.char=""),
   error=function(e) NULL)
+# Exclude 7SLRNA (SRP RNA, misclassified as SINE/Alu by RepeatMasker — not a TE)
+# and chrM (mitochondrial genome has no TEs; hits are mapping artefacts)
+te_clusters_n7sl_excluded <- 0L
+te_clusters <- if (!is.null(te_clusters_raw)) {
+  excl <- grepl("7SLRNA", te_clusters_raw$te_family, fixed=TRUE) |
+          te_clusters_raw$chrom == "chrM"
+  te_clusters_n7sl_excluded <- sum(excl)
+  te_clusters_raw[!excl, ]
+} else NULL
 te_somatic      <- safe_read(file.path(m23_dir, "somatic_te_insertions.tsv"))
 te_ins_summary  <- safe_read(file.path(m23_dir, "insertion_summary.tsv"))
 humann_paths    <- safe_read(file.path(out, "m20_metatranscriptomics/humann3/all_pathabundance_cpm.tsv"),
@@ -3046,14 +3055,14 @@ if (!is.null(wgcna_mt_cor) && nrow(wgcna_mt_cor) > 0 &&
     kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
 } else if (!is.null(wgcna_mt_cor) && all(is.na(wgcna_mt_cor$correlation))) {
   cat(sprintf(paste0(
-    "WGCNA module-trait correlations are all NA (%d modules).\n",
-    "This is expected with n=3 samples per condition: WGCNA requires ≥6-10 samples ",
-    "per group for reliable correlation estimates. The modules are detected but ",
-    "cannot be statistically correlated to condition with the current sample size.\n"),
+    "> **Note — module-trait correlation not computable (n=3 per condition).**  \n",
+    "> WGCNA identified %d co-expression modules (see hub genes above), but ",
+    "Pearson module-eigengene/condition correlations require ≥6–10 samples per group ",
+    "for reliable estimation. With n=3 per condition, all correlation values are NA. ",
+    "This is a known limitation of WGCNA at low sample sizes; the modules themselves ",
+    "are stable and the hub gene rankings are valid. Module-trait correlations will ",
+    "be interpretable if the dataset is expanded.\n"),
     nrow(wgcna_mt_cor)))
-  wgcna_mt_cor |>
-    knitr::kable(caption="WGCNA modules (correlations not computable with n=3 per group).") |>
-    kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
 } else cat("Module-trait correlation not available.\n")
 ```
 
@@ -3943,8 +3952,16 @@ if (!is.null(te_ins_summary)) {
 ```
 
 ## Insertion Clusters
-```{r te-insertion-table}
+```{r te-insertion-table, results='asis'}
 if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
+  if (te_clusters_n7sl_excluded > 0)
+    cat(sprintf(
+      paste0("> **Note:** %d clusters matching 7SLRNA (Signal Recognition Particle RNA — ",
+             "misclassified as SINE/Alu by RepeatMasker but not a transposable element) ",
+             "and mitochondrial chromosome (chrM) loci were excluded from all M23 figures ",
+             "and tables. These represent mapping artefacts, not genuine somatic TE insertions. ",
+             "Retained: %d clusters on canonical chromosomes (chr1–22, X, Y).\n"),
+      te_clusters_n7sl_excluded, nrow(te_clusters)))
   # Convert Python bool strings to R logical
   if ("somatic_candidate" %in% colnames(te_clusters) &&
       is.character(te_clusters$somatic_candidate))
@@ -3957,10 +3974,12 @@ if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
                     "n_reads_total","n_normal","n_tumor","n_control","n_treatment",
                     "somatic","gene_name","dist"))) |>
     DT::datatable(
-      caption=sprintf("TE insertion clusters (%d total).", nrow(te_clusters)),
+      caption=sprintf("TE insertion clusters (%d total, 7SLRNA/chrM excluded).",
+                      nrow(te_clusters)),
       options=list(pageLength=15, scrollX=TRUE,
                    dom="Bfrtip", buttons=c("csv","excel")),
-      extensions="Buttons", rownames=FALSE, filter="top")
+      extensions="Buttons", rownames=FALSE, filter="top") |>
+    print()
 } else cat("TE insertion cluster data not available.\n")
 ```
 
