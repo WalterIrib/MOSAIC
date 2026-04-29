@@ -54,7 +54,7 @@ and can download FASTQ files automatically from SRA/ENA.
 - [bowtie2](https://bowtie-bio.sourceforge.net/bowtie2/) ≥ 2.4
 - [fastp](https://github.com/OpenGene/fastp) ≥ 0.23
 - [rMATS](https://github.com/Xinglab/rmats-turbo) ≥ 4.1
-- [JACUSA2](https://github.com/dieterich-lab/JACUSA2) ≥ 2.0
+- [JACUSA2](https://github.com/dieterich-lab/JACUSA2) ≥ 2.1
 - [CIRI2](https://sourceforge.net/projects/ciri/) ≥ 2.0
 - [Arriba](https://github.com/suhrig/arriba) ≥ 2.4
 - [StringTie](https://ccb.jhu.edu/software/stringtie/) ≥ 2.2
@@ -195,6 +195,7 @@ A `CITATION.cff` file is provided for automated citation tools (Zenodo, GitHub, 
 **Walter Arancio**
 Institute of Biomedical Research and Innovation (IRIB), CNR — Palermo, Italy
 [walter.arancio@irib.cnr.it](mailto:walter.arancio@irib.cnr.it)
+GitHub: [https://github.com/WalterIrib](https://github.com/WalterIrib)
 
 ---
 

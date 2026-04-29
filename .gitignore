@@ -9,6 +9,10 @@ build/
 
 # Logs
 *.log
+wget-log*
+*_bwa.log
+*_handoff.md
+*checklist*.md
 
 # Large data files
 *.bam
