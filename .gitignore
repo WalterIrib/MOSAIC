@@ -22,5 +22,23 @@ build/
 mosaic_output/
 mio_primo_progetto/
 
+# Pipeline HTML reports (generated output)
+*_report.html
+
+# Download logs
+wget-log*
+
+# R session artifacts
+.Rhistory
+.RData
+.Rproj.user/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
 # Temp
 .mosaic_state.json

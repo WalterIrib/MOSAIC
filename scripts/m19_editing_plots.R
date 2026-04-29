@@ -108,7 +108,7 @@ p_scatter <- ggplot(sites_plot,
     name="Editing change"
   ) +
   labs(
-    title="Editing frequency: normal vs tumor",
+    title=sprintf("Editing frequency: %s vs %s", opt$treatment, opt$control),
     subtitle=sprintf("Increased: %d | Decreased: %d | Similar: %d",
                      n_inc, n_dec,
                      nrow(sites_plot) - n_inc - n_dec),
@@ -286,7 +286,7 @@ if (!is.null(all_edits) && nrow(all_edits) > 0 && "mutation_type" %in% colnames(
     scale_fill_manual(values=type_colors, name="Substitution class") +
     labs(
       title="RNA editing mutation spectrum (all types)",
-      subtitle=sprintf("Total sites: %s | treatment=%s vs control=%s",
+      subtitle=sprintf("Total sites: %s | %s vs %s",
                        format(nrow(all_edits), big.mark=","),
                        opt$treatment, opt$control),
       x="Mutation type", y="Number of sites"
