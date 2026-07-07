@@ -1,0 +1,55 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+type: software
+title: "MOSAIC — Multi-Omic Sequencing Analysis and Integrated Characterization"
+version: 1.0.0
+date-released: "2026-04-29"
+doi: "10.1016/j.ygeno.2026.XXXXXX"
+url: "https://github.com/WalterIrib/MOSAIC"
+repository-code: "https://github.com/WalterIrib/MOSAIC"
+license: MIT
+abstract: >
+  MOSAIC is a modular, automated pipeline for comprehensive multi-omic RNA-seq
+  analysis. It covers differential gene expression, transposable element
+  quantification and locus-level DE, alternative splicing, RNA editing, circRNA
+  detection, fusion genes, co-expression networks, and metatranscriptomics.
+  Results are delivered as interactive Quarto HTML reports.
+keywords:
+  - RNA-seq
+  - bioinformatics
+  - transposable elements
+  - alternative splicing
+  - RNA editing
+  - multi-omics
+  - pipeline
+authors:
+  - family-names: Arancio
+    given-names: Walter
+    affiliation: >
+      Institute of Biomedical Research and Innovation (IRIB),
+      National Research Council (CNR), Palermo, Italy
+    email: walter.arancio@irib.cnr.it
+    orcid: "https://orcid.org/0000-0000-0000-0000"
+preferred-citation:
+  type: article
+  title: >
+    MOSAIC: an automated platform for unbiased multi-omic RNA-seq analysis
+    reveals mitotic regulation of splicing, transposable elements, and RNA
+    editing in chromatin-associated RNA
+  authors:
+    - family-names: Sciaraffa
+      given-names: Nicolina
+    - family-names: Russo
+      given-names: Roberta
+    - family-names: Zito
+      given-names: Francesca
+    - family-names: Cusimano
+      given-names: Antonella
+    - family-names: Deidda
+      given-names: Irene
+    - family-names: Arancio
+      given-names: Walter
+  journal: "Genomics"
+  publisher: "Elsevier"
+  year: 2026
+  doi: "10.1016/j.ygeno.2026.XXXXXX"

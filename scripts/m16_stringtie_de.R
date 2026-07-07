@@ -1,0 +1,317 @@
+#!/usr/bin/env Rscript
+# mosaic/scripts/m16_stringtie_de.R
+# M16 - StringTie de novo transcript assembly and DE analysis
+#
+# Input:  t_data.ctab per sample (from stringtie -e -b)
+#         novel_transcripts.tmap (from gffcompare)
+#         gffcmp.merged.gtf.tmap (all class codes)
+# Output: novel_transcript_counts.tsv
+#         novel_transcript_DE.tsv
+#         stringtie_summary.tsv
+#         plots: class_code_barplot, novel_de_volcano, novel_de_table
+
+suppressPackageStartupMessages({
+  library(optparse)
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+})
+
+option_list <- list(
+  make_option("--st-dir",     type="character", help="StringTie output dir (m16_stringtie)"),
+  make_option("--tmap",       type="character", help="gffcmp.merged.gtf.tmap"),
+  make_option("--novel-tmap", type="character", help="novel_transcripts.tmap"),
+  make_option("--coldata",    type="character", help="coldata.tsv (sample_id, condition)"),
+  make_option("--outdir",     type="character", default="mosaic_output/m16_stringtie"),
+  make_option("--treatment",  type="character", default="tumor"),
+  make_option("--control",    type="character", default="normal"),
+  make_option("--padj",       type="double",    default=0.05),
+  make_option("--lfc",        type="double",    default=1.0),
+  make_option("--min-cov",    type="double",    default=1.0,
+              help="Min mean coverage to keep transcript")
+)
+
+opt <- parse_args(OptionParser(option_list=option_list))
+dir.create(opt$outdir, recursive=TRUE, showWarnings=FALSE)
+
+cat("[INF] M16 - StringTie DE analysis\n")
+
+safe_read <- function(path, ...) {
+  if (!is.null(path) && file.exists(path))
+    tryCatch(read.table(path, header=TRUE, sep="\t",
+                        check.names=FALSE, stringsAsFactors=FALSE, ...),
+             error=function(e) { cat("[WARN]", conditionMessage(e), "\n"); NULL })
+  else { cat("[WARN] Not found:", path %||% "NULL", "\n"); NULL }
+}
+`%||%` <- function(a,b) if(!is.null(a)) a else b
+write_tsv <- function(df, path) {
+  write.table(df, path, sep="\t", quote=FALSE, row.names=FALSE)
+  cat("[OK] Saved:", basename(path), sprintf("(%d rows)\n", nrow(df)))
+}
+
+# Class code descriptions
+class_desc <- c(
+  "=" = "Exact match to reference",
+  "j" = "Novel junction combination",
+  "k" = "Containment of reference",
+  "c" = "Contained in reference",
+  "m" = "Retained intron (all introns)",
+  "n" = "Retained intron (partial)",
+  "o" = "Overlapping (different strand)",
+  "x" = "Antisense to reference",
+  "i" = "Novel intronic transcript",
+  "u" = "Novel intergenic transcript",
+  "e" = "Single exon overlapping",
+  "s" = "Intron-matching on opposite strand",
+  "p" = "Possible polymerase run-on"
+)
+
+# ── 1. Load tmap and summarise class codes ─────────────────────────────────────
+tmap <- safe_read(opt$tmap)
+# novel_transcripts.tmap has no header (extracted with awk)
+novel_tmap_raw <- if (!is.null(opt[["novel-tmap"]]) && file.exists(opt[["novel-tmap"]]))
+  tryCatch(
+    read.table(opt[["novel-tmap"]], header=FALSE, sep="	",
+               stringsAsFactors=FALSE, fill=TRUE,
+               col.names=c("ref_gene_id","ref_id","class_code","qry_gene_id",
+                           "qry_id","num_exons","FPKM","TPM","cov","len",
+                           "major_iso_id","ref_match_len")),
+    error=function(e) NULL
+  ) else NULL
+novel_tmap <- novel_tmap_raw
+
+if (!is.null(tmap)) {
+  cat("[INF] Class code distribution:\n")
+  cc_summary <- tmap |>
+    count(class_code) |>
+    mutate(
+      description = class_desc[class_code] %||% "Unknown",
+      novel = class_code %in% c("u","i","j","x","n","o")
+    ) |>
+    arrange(desc(n))
+  print(cc_summary)
+  write_tsv(cc_summary, file.path(opt$outdir, "class_code_summary.tsv"))
+
+  # Plot
+  p_cc <- cc_summary |>
+    mutate(label=paste0(class_code, "\n", sub(" .*","",description)),
+           label=reorder(label, n)) |>
+    ggplot(aes(x=label, y=n, fill=novel)) +
+    geom_col() +
+    scale_fill_manual(values=c("TRUE"="#E74C3C","FALSE"="#85C1E9"),
+                      labels=c("TRUE"="Novel","FALSE"="Annotated"),
+                      name=NULL) +
+    scale_y_continuous(labels=scales::comma) +
+    labs(title="StringTie transcript classification (gffcompare)",
+         subtitle="Red = novel/partially novel; blue = matching reference",
+         x="Class code", y="Number of transcripts") +
+    theme_minimal(base_size=12)
+  ggsave(file.path(opt$outdir, "class_code_barplot.pdf"), p_cc, width=9, height=5)
+  ggsave(file.path(opt$outdir, "class_code_barplot.png"), p_cc, width=9, height=5, dpi=150)
+}
+
+# ── 2. Build count matrix from t_data.ctab ────────────────────────────────────
+cat("[INF] Building transcript count matrix...\n")
+coldata <- safe_read(opt$coldata)
+if (is.null(coldata)) {
+  cat("[ERROR] --coldata required\n"); quit(status=1)
+}
+
+# Find sample directories
+sample_dirs <- list.dirs(opt[["st-dir"]], recursive=FALSE, full.names=TRUE)
+quant_dirs  <- sample_dirs[grepl("_quant$", sample_dirs)]
+
+if (length(quant_dirs) == 0) {
+  cat("[ERROR] No *_quant directories found in", opt[["st-dir"]], "\n")
+  quit(status=1)
+}
+
+cat(sprintf("[INF] Found %d quantification directories\n", length(quant_dirs)))
+
+# Load t_data.ctab for each sample
+ctab_list <- lapply(quant_dirs, function(d) {
+  sid  <- sub("_quant$", "", basename(d))
+  path <- file.path(d, "t_data.ctab")
+  if (!file.exists(path)) { cat("[WARN] Missing:", path, "\n"); return(NULL) }
+  df <- read.table(path, header=TRUE, sep="\t", stringsAsFactors=FALSE)
+  df$sample_id <- sid
+  df
+})
+ctab_list <- Filter(Negate(is.null), ctab_list)
+
+if (length(ctab_list) == 0) {
+  cat("[ERROR] No t_data.ctab files found\n"); quit(status=1)
+}
+
+all_ctab <- bind_rows(ctab_list)
+
+# Wide matrix: rows = transcripts, cols = samples (FPKM)
+fpkm_wide <- all_ctab |>
+  select(t_name, sample_id, FPKM) |>
+  pivot_wider(names_from=sample_id, values_from=FPKM, values_fill=0)
+
+# Coverage matrix for filtering
+cov_wide <- all_ctab |>
+  select(t_name, sample_id, cov) |>
+  pivot_wider(names_from=sample_id, values_from=cov, values_fill=0)
+
+# Transcript metadata
+tx_meta <- all_ctab |>
+  select(t_id, t_name, chr, strand, start, end, num_exons, length,
+         gene_id, gene_name) |>
+  distinct()
+
+cat(sprintf("[INF] Total transcripts: %d | Samples: %d\n",
+            nrow(fpkm_wide), length(quant_dirs)))
+
+# ── 3. Filter to novel transcripts ────────────────────────────────────────────
+novel_ids <- if (!is.null(novel_tmap)) unique(novel_tmap$qry_id) else
+             character(0)
+
+cat(sprintf("[INF] Novel transcript IDs from tmap: %d\n", length(novel_ids)))
+
+# Filter matrix to novel
+novel_fpkm <- fpkm_wide |> filter(t_name %in% novel_ids)
+novel_cov   <- cov_wide  |> filter(t_name %in% novel_ids)
+
+cat(sprintf("[INF] Novel transcripts in matrix: %d\n", nrow(novel_fpkm)))
+
+# Filter by minimum coverage
+if (nrow(novel_cov) > 0) {
+  cov_mat    <- as.matrix(novel_cov[,-1])
+  mean_cov   <- rowMeans(cov_mat, na.rm=TRUE)
+  keep       <- mean_cov >= opt[["min-cov"]]
+  novel_fpkm <- novel_fpkm[keep, ]
+  cat(sprintf("[INF] After min coverage filter (>= %.1f): %d transcripts\n",
+              opt[["min-cov"]], nrow(novel_fpkm)))
+}
+
+# Add class code annotation
+if (!is.null(novel_tmap)) {
+  novel_fpkm <- novel_fpkm |>
+    left_join(if (!is.null(novel_tmap))
+                novel_tmap |>
+                  select(t_name=qry_id, class_code, ref_gene_id,
+                         num_exons, len) |>
+                  mutate(class_desc=class_desc[class_code])
+              else data.frame(t_name=character(0)),
+              by="t_name")
+}
+
+write_tsv(novel_fpkm, file.path(opt$outdir, "novel_transcript_fpkm.tsv"))
+
+# ── 4. DE analysis on novel transcripts ───────────────────────────────────────
+cat("[INF] DE analysis on novel transcripts...\n")
+
+if (!requireNamespace("DESeq2", quietly=TRUE)) {
+  cat("[WARN] DESeq2 not available - skipping DE\n")
+} else if (nrow(novel_fpkm) < 3) {
+  cat("[WARN] Too few novel transcripts for DE\n")
+} else {
+  library(DESeq2)
+
+  # Use rounded FPKM as proxy counts (no raw counts from StringTie -e)
+  # Better: use coverage * length as proxy for read counts
+  sample_cols <- coldata$sample_id[coldata$sample_id %in% colnames(novel_fpkm)]
+  count_mat   <- round(as.matrix(novel_fpkm[, sample_cols]) * 10)
+  rownames(count_mat) <- novel_fpkm$t_name
+
+  # Remove all-zero rows
+  keep_rows  <- rowSums(count_mat) > 0
+  count_mat  <- count_mat[keep_rows, ]
+  cat(sprintf("[INF] Non-zero novel transcripts: %d\n", nrow(count_mat)))
+
+  if (nrow(count_mat) >= 3 && ncol(count_mat) >= 4) {
+    cd <- coldata[match(colnames(count_mat), coldata$sample_id), ]
+    cd$condition <- factor(cd$condition,
+                           levels=c(opt$control, opt$treatment))
+
+    dds <- DESeqDataSetFromMatrix(count_mat, cd, ~condition)
+    dds <- DESeq(dds, quiet=TRUE)
+    res <- results(dds,
+                   contrast=c("condition", opt$treatment, opt$control),
+                   alpha=opt$padj)
+    res_df <- as.data.frame(res) |>
+      tibble::rownames_to_column("t_name") |>
+      left_join(novel_fpkm |>
+                  select(t_name, any_of(c("class_code","class_desc",
+                                          "ref_gene_id","num_exons","len"))),
+                by="t_name") |>
+      left_join(tx_meta |> select(t_name, chr, strand, start, end,
+                                  gene_id, gene_name),
+                by="t_name") |>
+      arrange(padj, desc(abs(log2FoldChange)))
+
+    write_tsv(res_df, file.path(opt$outdir, "novel_transcript_DE.tsv"))
+
+    n_sig <- sum(!is.na(res_df$padj) & res_df$padj < opt$padj &
+                   abs(res_df$log2FoldChange) > opt$lfc)
+    cat(sprintf("[INF] Significant novel DE transcripts: %d\n", n_sig))
+
+    # Volcano plot
+    p_vol <- res_df |>
+      filter(!is.na(padj), !is.na(log2FoldChange)) |>
+      mutate(
+        sig  = padj < opt$padj & abs(log2FoldChange) > opt$lfc,
+        lab  = ifelse(sig, t_name, NA),
+        col  = case_when(
+          sig & log2FoldChange > 0 ~ "UP",
+          sig & log2FoldChange < 0 ~ "DOWN",
+          TRUE ~ "NS"
+        )
+      ) |>
+      ggplot(aes(x=log2FoldChange, y=-log10(padj), color=col)) +
+      geom_point(alpha=0.7, size=1.8) +
+      ggrepel::geom_text_repel(aes(label=lab), size=2.5,
+                                max.overlaps=15, show.legend=FALSE) +
+      scale_color_manual(values=c(UP="#E74C3C",DOWN="#3498DB",NS="#BDC3C7"),
+                         name=NULL) +
+      geom_vline(xintercept=c(-opt$lfc, opt$lfc),
+                 linetype="dashed", color="grey50") +
+      geom_hline(yintercept=-log10(opt$padj),
+                 linetype="dashed", color="grey50") +
+      labs(title="Novel transcript DE - volcano plot",
+           subtitle=sprintf("%s vs %s | padj<%.2f | |LFC|>%.1f | %d sig",
+                            opt$treatment, opt$control,
+                            opt$padj, opt$lfc, n_sig),
+           x=sprintf("log2FC (%s / %s)", opt$treatment, opt$control),
+           y="-log10(padj)") +
+      theme_minimal(base_size=12)
+
+    ggsave(file.path(opt$outdir, "novel_de_volcano.pdf"), p_vol, width=8, height=6)
+    ggsave(file.path(opt$outdir, "novel_de_volcano.png"), p_vol, width=8, height=6, dpi=150)
+  } else {
+    cat("[WARN] Insufficient transcripts/samples for DESeq2\n")
+  }
+}
+
+# ── 5. Summary table ──────────────────────────────────────────────────────────
+summary_df <- data.frame(
+  metric = c(
+    "Total merged transcripts",
+    "Exact match (=)",
+    "Novel junction combo (j)",
+    "Novel intronic (i)",
+    "Novel intergenic (u)",
+    "Antisense (x)",
+    "Other novel",
+    "Novel candidates (filtered)",
+    "Novel after coverage filter"
+  ),
+  value = c(
+    if (!is.null(tmap)) nrow(tmap) else NA,
+    if (!is.null(tmap)) sum(tmap$class_code=="=") else NA,
+    if (!is.null(tmap)) sum(tmap$class_code=="j") else NA,
+    if (!is.null(tmap)) sum(tmap$class_code=="i") else NA,
+    if (!is.null(tmap)) sum(tmap$class_code=="u") else NA,
+    if (!is.null(tmap)) sum(tmap$class_code=="x") else NA,
+    if (!is.null(tmap)) sum(tmap$class_code %in% c("n","o","e","s","p")) else NA,
+    length(novel_ids),
+    nrow(novel_fpkm)
+  )
+)
+write_tsv(summary_df, file.path(opt$outdir, "stringtie_summary.tsv"))
+
+cat("\n[INF] M16 Summary:\n")
+print(summary_df, row.names=FALSE)
+cat("[OK] M16 complete. Output:", opt$outdir, "\n")

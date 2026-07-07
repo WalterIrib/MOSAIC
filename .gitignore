@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+
+# MOSAIC run outputs / checkpoints
+mosaic_output/
+**/mosaic_output/
+.mosaic_state.json
+*.log
+
+# Test data: the generator rebuilds these; do not commit large binaries.
+test_data/.work/
+test_data/fastq/
+test_data/reference/
+test_data/mosaic_output/
+test_data/coldata.tsv
+test_data/config_test.yaml
+
+# Quarto / knitr intermediate figure dirs
+scripts/m14_report_files_*/
+**/*_files/
+
+# OS
+.DS_Store

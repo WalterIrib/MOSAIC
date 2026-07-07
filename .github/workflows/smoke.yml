@@ -1,0 +1,80 @@
+name: smoke
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # ── Always-on structural gate (GitHub-hosted, no references needed) ────────
+  structural:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package (light deps only)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . pytest pyyaml
+
+      - name: Python byte-compile all sources
+        run: python -m compileall -q mosaic check_canonical.py tests
+
+      - name: CLI is importable
+        run: python -m mosaic --help
+
+      - name: Config templates parse (with dummy env)
+        env:
+          MOSAIC_REF: /tmp/ref
+          MOSAIC_DATA: /tmp/data
+        run: |
+          python - <<'PY'
+          from mosaic.config import _expand_env
+          import yaml
+          for f in ("config_template.yaml", "configs/config_charna.yaml"):
+              raw = _expand_env(yaml.safe_load(open(f)))
+              assert isinstance(raw, dict), f
+              print("parsed OK:", f)
+          PY
+
+      - name: R scripts syntax-check (if R present)
+        run: |
+          if command -v Rscript >/dev/null; then
+            for f in scripts/*.R; do
+              Rscript -e "parse('$f')" || exit 1
+            done
+          else
+            echo "R not installed on runner — skipping R syntax check"
+          fi
+
+  # ── Full functional smoke test (self-hosted runner with the conda env and
+  #    reference databases available; or triggered manually). Requires the
+  #    MOSAIC_REF / CHARNA_FASTQ_DIR to point at real references + FASTQs. ─────
+  functional:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: [self-hosted, mosaic]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install package into the mosaic env
+        shell: bash -l {0}
+        run: |
+          conda activate mosaic
+          pip install -e .
+
+      - name: Generate the chr1+chr22 test subset
+        shell: bash -l {0}
+        run: |
+          conda activate mosaic
+          bash test_data/generate_test_data.sh
+
+      - name: Run functional smoke test
+        shell: bash -l {0}
+        run: |
+          conda activate mosaic
+          pytest tests/smoke_test.py -v

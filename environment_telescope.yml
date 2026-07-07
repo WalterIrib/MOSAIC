@@ -1,0 +1,15 @@
+# Separate environment for the Telescope TE-quantification BENCHMARK only (§4.8).
+# Telescope 1.0.3 requires Python 3.7 and is incompatible with the main env.
+#   conda env create -f environment_telescope.yml
+#   conda activate telescope_env37
+# Not needed to run the core MOSAIC pipeline (m02–m23).
+name: telescope_env37
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.7
+  - telescope=1.0.3
+  - samtools=1.23
+  - pysam

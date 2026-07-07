@@ -1,0 +1,74 @@
+# MOSAIC main conda environment ("mosaic").
+# All versions below were verified from the live environment used to produce the
+# manuscript results (see versions.txt / Supplementary Table S5).
+#
+#   conda env create -f environment.yml
+#   conda activate mosaic
+#
+# Notes
+# -----
+# * R (4.5.1) and the Bioconductor/CRAN packages are pinned here via bioconda so a
+#   single `conda env create` reproduces the full stack. The authors' original
+#   runs used system R 4.5.1 with the same package versions installed via
+#   BiocManager (see scripts/install_r_packages.R for that alternative).
+# * Two tools run in SEPARATE environments and are NOT part of this file:
+#     - Telescope 1.0.3  (benchmark only) -> environment_telescope.yml (Python 3.7)
+#     - HUMAnN3 / MetaPhlAn (optional M20b) -> conda env "humann3"
+# * Binary/script tools not on conda (paths set in config.yaml):
+#     - Arriba 2.4.0        (M15; download binary release)
+#     - CIRI2 2.0.6         (M06; Perl script)
+#   JACUSA2 2.1.16 IS provided by bioconda (jar under share/).
+name: mosaic
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  # ── Core interpreters ──────────────────────────────────────────────────────
+  - python=3.11.9
+  - r-base=4.5.1
+  # ── Read trimming / QC ─────────────────────────────────────────────────────
+  - fastp=1.1.0
+  - rseqc=5.0.4
+  # ── Alignment ──────────────────────────────────────────────────────────────
+  - star=2.7.10b
+  - hisat2=2.2.2                 # independent validation pipeline (§4.7)
+  - bowtie2=2.5.4                # TE/satellite family quantification (M05/M09)
+  # ── Quantification / utilities ─────────────────────────────────────────────
+  - subread=2.1.1                # featureCounts (M08)
+  - bedtools=2.31.1              # TE locus overlap counting (M12)
+  - samtools=1.23
+  # ── Splicing ───────────────────────────────────────────────────────────────
+  - rmats=4.3.0                  # M17
+  - suppa=2.4                    # splicing benchmark (§4.8)
+  # ── Transcript assembly ────────────────────────────────────────────────────
+  - stringtie=2.1.7              # M16
+  - gffcompare=0.12.10
+  # ── Gene-quant benchmark ───────────────────────────────────────────────────
+  - salmon=2.2.1                 # §4.8
+  # ── RNA editing ────────────────────────────────────────────────────────────
+  - jacusa2=2.1.16               # M19
+  # ── Metatranscriptomics (optional M20) ─────────────────────────────────────
+  - kraken2=2.17.1
+  # ── Python libraries ───────────────────────────────────────────────────────
+  - pysam=0.23.3
+  - numpy=1.26.4
+  - pandas
+  - scipy
+  - pyyaml
+  - matplotlib-base
+  - adjusttext
+  # ── R / Bioconductor stack (pinned to manuscript versions) ─────────────────
+  - bioconductor-deseq2=1.50.2
+  - r-ashr=2.2.63                # lfcShrink type="ashr"
+  - bioconductor-clusterprofiler=4.18.4
+  - r-wgcna=1.74
+  - bioconductor-stringdb=2.22.0
+  - r-optparse=1.7.5
+  - r-dplyr=1.2.0
+  - r-data.table
+  - r-ggplot2
+  # ── pip-only ───────────────────────────────────────────────────────────────
+  - pip
+  - pip:
+      - REDItools3==3.7          # editing benchmark (§4.8), chr1 only

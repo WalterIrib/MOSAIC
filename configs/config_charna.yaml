@@ -1,0 +1,117 @@
+# =============================================================================
+# MOSAIC — Chromatin-associated RNA experiment (ENA PRJEB112202)
+# Reproducer config for the manuscript's mitotic ChaRNA application.
+#
+# Portable paths: export the two roots before running, e.g.
+#   export MOSAIC_REF=/data/references          # reference databases
+#   export MOSAIC_DATA=/data/charna_fastq        # raw FASTQs (ENA PRJEB112202)
+# Then:
+#   mosaic check   configs/config_charna.yaml
+#   mosaic run     configs/config_charna.yaml
+# =============================================================================
+project:
+  name: charna_mitosis
+  wd: ${MOSAIC_DATA}/mosaic_output
+  organism: human
+  genome_build: hg38
+  annotation_version: gencode_v49
+  biological_context: other
+  random_seed: 42
+
+sequencing:
+  type: PE
+  read_length: 150
+  strandedness: auto
+
+library:
+  prep: rRNA_depletion            # Ribo-Zero Plus; polyA would BLOCK TE analysis
+  layout: PE
+
+samples:
+  fastq_dir: ${MOSAIC_DATA}/fastq
+  coldata:   ${MOSAIC_DATA}/coldata.tsv   # sample_id, condition, fraction, phase
+
+# Three comparisons reproduced in the paper (Supplementary Data S4–S6).
+comparisons:
+  - treatment: mito-ChaRNA
+    control:   ChaRNA
+  - treatment: mito-totRNA
+    control:   totRNA
+  - type: interaction               # ~fraction + phase + fraction:phase
+    name: ChaRNA_interaction
+    treatment: mito-ChaRNA
+    control:   ChaRNA
+
+databases:
+  db_root:       ${MOSAIC_REF}
+  genome_fa:     ${MOSAIC_REF}/GRCh38.primary_assembly.genome.fa
+  gtf:           ${MOSAIC_REF}/gencode.v49.annotation.gtf
+  star_index:    ${MOSAIC_REF}/star_index
+  te_consensus:  ${MOSAIC_REF}/dfam/pseudochromosomes/consensus_TE.fa
+  te_satellite:  ${MOSAIC_REF}/dfam/pseudochromosomes/consensus_satellite.fa
+  rmsk_bed:      ${MOSAIC_REF}/rmsk/rmsk.txt.gz
+  te_gtf:        ${MOSAIC_REF}/rmsk/TE.gtf
+  arriba_bin:    ${MOSAIC_REF}/arriba_v2.4.0/arriba
+  arriba_db:     ${MOSAIC_REF}/arriba_v2.4.0/database
+  auto_download: false
+
+environments:
+  main:    mosaic
+  humann:  humann3
+  arriba:  null
+
+thresholds:
+  padj:               0.05
+  lfc:                1.0
+  min_cov_editing:    5
+  min_score_editing:  1.5
+  min_ef_editing:     0.05
+  editing_model:      "DirMult:PHRED"
+  min_reads_splicing: 10          # ≥10 junction reads (see Methods §4.4 / CHANGELOG)
+  min_clip_te:        30
+  min_support_te:     2
+  min_reads_meta:     10
+  min_samples_meta:   2
+
+# Robustness: a non-critical module failure (e.g. OOM in m18/m20/m23) is logged
+# and the run continues; the backbone (m02/m04/m05/m08) is always fatal on error.
+continue_on_error: true
+
+modules:
+  m00_download:     false
+  m02_trim:         true
+  m04_star:         true
+  m05_te_count:     true
+  m06_circrna:      true
+  m07_strandedness: true
+  m08_deseq2:       true
+  m09_satellite:    true
+  m10_go:           true
+  m11_te_host:      true
+  m11b_promoter_te: true
+  m11c_te_age:      true
+  m11d_te_de:       true
+  m12_tetranscripts: true
+  m15_fusion:       true
+  m16_stringtie:    true
+  m17_rmats:        true
+  m18_network:      true
+  m19_editing:      true
+  m20_meta:         false         # optional, off by default
+  m20b_humann:      false         # optional, off by default
+  m23_te_insertions: true
+  m14_report:       true
+
+threads: 20
+memory_gb: 30
+
+trimming:
+  min_phred: 20
+  min_length: 36
+  low_complexity_filter: false    # NEVER true — removes TE reads
+  trim_poly_x: false              # NEVER true — removes satellite reads
+
+report:
+  title: "MOSAIC — Chromatin-associated RNA (mitosis)"
+  remove_test_notes: true
+  produce_pdf: false
