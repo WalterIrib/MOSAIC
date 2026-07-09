@@ -2121,6 +2121,19 @@ class Pipeline:
         all_ok = True
         start  = datetime.now()
 
+        # gene_type_map.tsv is normally generated inside _run_m04_star, but any
+        # run that skips m04 via --from-module or explicit --modules must also have
+        # it (needed by m10_go, m11_te_host, m18_network). Generate it here if absent.
+        gene_map = self.out / "integrated" / "gene_type_map.tsv"
+        if not gene_map.exists():
+            try:
+                from .refs import extract_gene_type_map
+                (self.out / "integrated").mkdir(parents=True, exist_ok=True)
+                extract_gene_type_map(Path(self.cfg.databases.gtf), gene_map)
+                info(f"gene_type_map.tsv written: {gene_map}")
+            except Exception as e:
+                warn(f"Could not build gene_type_map.tsv: {e}")
+
         # Robustness policy: only the backbone modules are critical — without them
         # nothing downstream can run, so their failure aborts the pipeline. Every
         # other module (heavy/optional/screening: m18 WGCNA, m20 metatranscriptomics,
