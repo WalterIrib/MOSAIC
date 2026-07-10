@@ -421,14 +421,14 @@ def test_cli_init_and_check():
 
 
 def test_cli_refs_list_empty():
-    """mosaic-refs list on empty dir exits 0 and prints nothing."""
-    import subprocess, tempfile
-    with tempfile.TemporaryDirectory() as td:
-        r = subprocess.run(
-            ["mosaic-refs", "--db", td, "list"],
-            capture_output=True, text=True
-        )
-        assert r.returncode == 0
+    """mosaic db list subcommand is accessible (replaces legacy mosaic-refs list)."""
+    import subprocess
+    r = subprocess.run(
+        ["mosaic", "db", "list", "--help"],
+        capture_output=True, text=True
+    )
+    assert r.returncode == 0, r.stderr
+    assert "CONFIG_FILE" in r.stdout
     print("  PASS test_cli_refs_list_empty")
 
 
