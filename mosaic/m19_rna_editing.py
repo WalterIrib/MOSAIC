@@ -435,9 +435,18 @@ def main():
 
     if df_ai.empty:
         log.warning("No A-to-I sites after filtering")
-        # Save empty file
         pd.DataFrame().to_csv(
             os.path.join(args.outdir, "editing_sites_ato_i.tsv"),
+            sep="\t", index=False)
+        # Write zero-valued summary so downstream checks and report always find the file
+        pd.DataFrame([{
+            "metric": k, "value": v
+        } for k, v in {
+            "total_sites": 0, "sites_in_genes": 0,
+            "mean_EF_normal": 0, "mean_EF_tumor": 0, "mean_dEF": 0,
+            "sites_increased": 0, "sites_decreased": 0,
+        }.items()]).to_csv(
+            os.path.join(args.outdir, "editing_summary.tsv"),
             sep="\t", index=False)
         sys.exit(0)
 

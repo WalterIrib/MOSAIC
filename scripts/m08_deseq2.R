@@ -324,7 +324,16 @@ if (opt$mode == "interaction") {
       error = function(e) {
         message("[WARN] local dispersion fit failed (", conditionMessage(e),
                 "); retrying with fitType='mean'")
-        DESeq(dds_te_int, fitType="mean", quiet=TRUE)
+        tryCatch(
+          DESeq(dds_te_int, fitType="mean", quiet=TRUE),
+          error = function(e2) {
+            message("[WARN] mean dispersion fit also failed (", conditionMessage(e2),
+                    "); using gene-wise dispersion estimates directly")
+            dds_te_int <- estimateDispersionsGeneEst(dds_te_int)
+            dispersions(dds_te_int) <- mcols(dds_te_int)$dispGeneEst
+            nbinomWaldTest(dds_te_int)
+          }
+        )
       })
 
     for (coef in c(interact_coef, phase_coef)) {
@@ -580,7 +589,16 @@ run_te_de <- function(te_tsv, sat_tsv, coldata, sf, outdir,
       error = function(e) {
         message("[WARN] local dispersion fit failed (", conditionMessage(e),
                 "); retrying with fitType='mean'")
-        DESeq(dds_te, fitType="mean", quiet=TRUE)
+        tryCatch(
+          DESeq(dds_te, fitType="mean", quiet=TRUE),
+          error = function(e2) {
+            message("[WARN] mean dispersion fit also failed (", conditionMessage(e2),
+                    "); using gene-wise dispersion estimates directly")
+            dds_te <- estimateDispersionsGeneEst(dds_te)
+            dispersions(dds_te) <- mcols(dds_te)$dispGeneEst
+            nbinomWaldTest(dds_te)
+          }
+        )
       })
 
     res <- results(dds_te,
@@ -653,22 +671,8 @@ run_te_de <- function(te_tsv, sat_tsv, coldata, sf, outdir,
   }
 }
 
-cat("\n[INF] Running TE and satellite DE (independentFiltering=FALSE)...\n")
-run_te_de(
-  te_tsv=opt[["te-counts"]],
-  sat_tsv=opt[["sat-counts"]],
-  coldata=coldata,
-  sf=sf_result$sf,
-  outdir=opt$outdir,
-  lfc_threshold=opt$lfc,
-  padj_threshold=opt$padj,
-  shrink_method=opt$shrink,
-  mode=opt$mode
-)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
-# Write canonical gene results
+# Write canonical gene results (before TE/satellite DE so output is always saved)
 # ─────────────────────────────────────────────────────────────────────────────
 
 cat("\n[INF] Writing results...\n")
@@ -692,6 +696,19 @@ for (label in names(results_list)) {
   cat(sprintf("[INF] Significant: %d genes (padj<%.3f, |LFC|>%.1f)\n",
               nrow(sig_df), opt$padj, opt$lfc))
 }
+
+cat("\n[INF] Running TE and satellite DE (independentFiltering=FALSE)...\n")
+run_te_de(
+  te_tsv=opt[["te-counts"]],
+  sat_tsv=opt[["sat-counts"]],
+  coldata=coldata,
+  sf=sf_result$sf,
+  outdir=opt$outdir,
+  lfc_threshold=opt$lfc,
+  padj_threshold=opt$padj,
+  shrink_method=opt$shrink,
+  mode=opt$mode
+)
 
 # Save normalized counts (DESeq2 size-factor corrected)
 norm_counts <- counts(dds, normalized=TRUE)

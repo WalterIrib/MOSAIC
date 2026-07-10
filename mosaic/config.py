@@ -309,7 +309,7 @@ class SamplesConfig:
         """Load coldata TSV and extract sample_ids."""
         import csv
         p = Path(self.coldata)
-        if not p.exists():
+        if not p.is_file():
             return
         with open(p) as fh:
             reader = csv.DictReader(fh, delimiter="\t")

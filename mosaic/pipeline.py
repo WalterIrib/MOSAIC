@@ -1719,8 +1719,10 @@ class ModuleRunner:
                               "humann", "--version"],
                              capture_output=True, text=True)
         if env_check.returncode != 0:
-            warn(f"humann not found in env '{env}' — skipping M20b")
-            warn("Install: conda activate humann3 && pip install humann")
+            warn("HUMAnN3 functional profiling (M20b) is not available in the "
+                 f"current environment ('{env}'). M20b is experimental and "
+                 "requires a separate conda environment; see README §Optional "
+                 "environments. Skipping M20b — the rest of the pipeline continues.")
             return True  # non-blocking
 
         all_ok = True

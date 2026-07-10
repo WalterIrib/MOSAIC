@@ -18,6 +18,8 @@
 #     - Arriba 2.4.0        (M15; download binary release)
 #     - CIRI2 2.0.6         (M06; Perl script)
 #   JACUSA2 2.1.16 IS provided by bioconda (jar under share/).
+# * Known transitive dependency not listed explicitly: blast-2.17.0
+#   (pulled in via kraken2 or suppa). Not used directly by MOSAIC scripts.
 name: mosaic
 channels:
   - conda-forge
@@ -26,7 +28,7 @@ channels:
 dependencies:
   # ── Core interpreters ──────────────────────────────────────────────────────
   - python=3.11.9
-  - r-base=4.5.1
+  - r-base=4.5.2
   # ── Read trimming / QC ─────────────────────────────────────────────────────
   - fastp=1.1.0
   - rseqc=5.0.4
@@ -48,6 +50,7 @@ dependencies:
   - salmon=2.2.1                 # §4.8
   # ── RNA editing ────────────────────────────────────────────────────────────
   - jacusa2=2.1.16               # M19
+  - bwa=0.7.19                   # M23 TE insertion detection (default aligner)
   # ── Metatranscriptomics (optional M20) ─────────────────────────────────────
   - kraken2=2.17.1
   # ── Python libraries ───────────────────────────────────────────────────────
@@ -62,12 +65,19 @@ dependencies:
   - bioconductor-deseq2=1.50.2
   - r-ashr=2.2.63                # lfcShrink type="ashr"
   - bioconductor-clusterprofiler=4.18.4
+  - bioconductor-org.hs.eg.db    # m10_go: GO enrichment annotation
+  - bioconductor-genomicfeatures # m08: gene-length fallback (exon union)
   - r-wgcna=1.74
   - bioconductor-stringdb=2.22.0
   - r-optparse=1.7.5
   - r-dplyr=1.2.0
   - r-data.table
   - r-ggplot2
+  - r-pheatmap                   # m14_report: heatmap
+  - r-kableextra                 # m14_report: HTML tables
+  - r-dt                         # m14_report: interactive DataTables (DT::datatable)
+  # ── Testing ────────────────────────────────────────────────────────────────
+  - pytest                       # smoke test runner (tests/ directory)
   # ── pip-only ───────────────────────────────────────────────────────────────
   - pip
   - pip:

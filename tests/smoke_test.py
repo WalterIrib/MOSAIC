@@ -40,7 +40,18 @@ except ImportError:                       # allow standalone `python tests/smoke
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "test_data" / "config_test.yaml"
-WD = ROOT / "test_data" / "mosaic_output"
+
+# Derive WD from config's project.wd so the test is valid at any install path.
+def _get_wd() -> Path:
+    try:
+        import yaml
+        with open(CONFIG) as fh:
+            cfg = yaml.safe_load(fh)
+        return Path(cfg["project"]["wd"]) / "mosaic_output"
+    except Exception:
+        return ROOT / "test_data" / "mosaic_output"
+
+WD = _get_wd()
 COMP = "mito-ChaRNA_vs_ChaRNA"
 RUN_TIMEOUT = int(os.environ.get("SMOKE_TIMEOUT", "5400"))
 

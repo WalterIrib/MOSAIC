@@ -180,6 +180,19 @@ summary_df <- bind_rows(lapply(names(rmats_filtered), function(et) {
   )
 }))
 
+# Ensure schema is preserved even when zero events are detected
+if (nrow(summary_df) == 0) {
+  summary_df <- data.frame(
+    event_type   = character(0),
+    description  = character(0),
+    total_events = integer(0),
+    sig_events   = integer(0),
+    sig_enhanced = integer(0),
+    sig_skipped  = integer(0),
+    mean_dpsi    = numeric(0)
+  )
+}
+
 cat("\n[INF] Splicing event summary:\n")
 print(summary_df, row.names=FALSE)
 write_tsv(summary_df, file.path(opt$outdir, "splicing_summary.tsv"))
