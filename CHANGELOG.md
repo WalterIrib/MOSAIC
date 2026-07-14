@@ -2,6 +2,51 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [Unreleased] — 2026-07-13/14 — Post-release fixes
+
+### Fixed — GO foreground (M10)
+
+- **`pipeline.py`: M10 GO enrichment was using all tested genes as foreground
+  instead of only DE-significant genes.** `m10_go.R` was called with
+  `genes_{comp}_DE.tsv` (~78,691 genes) as `--de-genes`. The correct input is
+  `genes_{comp}_DE_significant.tsv` (padj<0.05, |LFC|>1 only). Because
+  `m10_go.R` uses the file content directly as foreground with no internal
+  filter, this inflated the foreground 15–30× and produced spurious GO term
+  associations. Fixed by changing the `de_file` path in `_run_m10_go()`.
+  Impact: supplementary GO figures (Fig. S3) and any Results/caption text
+  referencing GO term counts are affected; corrected HTML reports regenerated
+  for all METACAR and De Cecco 2019 comparisons.
+
+### Fixed — M14 report: M12 path mismatch and interaction fallback messages
+
+- **`m14_report.qmd`: M12 locus files were looked up in `out/m12/` (global
+  output root) instead of `comp_dir/m12/` (per-comparison subdirectory).**
+  The pipeline writes `{comp}_te_de_sig.tsv` and `{comp}_te_de.tsv` under
+  `comparison_{comp}/m12/`, not under the global `mosaic_output/m12/`. This
+  caused a false-negative "not yet generated" for M12 locus data in all
+  comparisons even when the files existed. Fixed by changing `file.path(out,
+  "m12", ...)` to `file.path(comp_dir, "m12", ...)` for both `tet_sig` and
+  `tet_all`.
+
+- **`m14_report.qmd`: M17/M18/M19 fallback messages said "run M18 first" or
+  "not available" on interaction comparisons**, implying a missing execution
+  rather than an inapplicable analysis. Added `is_interaction` guard to show
+  "Not applicable to interaction comparisons (M17 rMATS / M18 / M19 JACUSA2
+  requires a two-group contrast)" for rMATS (two instances), WGCNA hub genes,
+  WGCNA modules, STRING PPI, and all three RNA-editing subsections.
+
+### Fixed — M15 Arriba not configured for METACAR
+
+- **`configs/config_metacar_gw.yaml` was missing `arriba_bin` and `arriba_db`**
+  in the `databases` section, so M15 fusion detection was never executed on the
+  METACAR dataset despite the Arriba binary and database being present and
+  fully functional (confirmed on De Cecco 2019). Added the two entries pointing
+  to the installed Arriba v2.4.0. Note: `config_template.yaml` and
+  `configs/config_charna.yaml` already had these keys with correct
+  `/path/to/...` / `${MOSAIC_REF}/` placeholders.
+
+---
+
 ## [1.1.0] — 2026-07-06 through 2026-07-09 — Reproducibility & robustness release
 
 This release is a cleaned, debugged, and reproducible version of the pipeline used
