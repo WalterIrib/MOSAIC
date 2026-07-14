@@ -1487,9 +1487,9 @@ class ModuleRunner:
         if not comp and not self._is_interaction_comparison(comparison):
             return False
         comp_dir = self._comparison_dir(comparison)
-        de_file  = comp_dir / "deseq2" / f"genes_{comparison}_DE.tsv"
+        de_file  = comp_dir / "deseq2" / f"genes_{comparison}_DE_significant.tsv"
         if not de_file.exists():
-            warn(f"DE file not found: {de_file} — run m08_deseq2 first")
+            warn(f"DE significant file not found: {de_file} — run m08_deseq2 first")
             return False
         out_dir = comp_dir / "go"
         out_dir.mkdir(parents=True, exist_ok=True)

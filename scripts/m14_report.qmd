@@ -181,13 +181,14 @@ if (file.exists(genes_bed_f)) {
 }
 tet_sig     <- {
   # Try new DESeq2 output (m12_deseq2.R), then legacy TEtranscripts format
-  f_new <- file.path(out, "m12", sprintf("%s_te_de_sig.tsv", comp))
-  f_leg <- file.path(out, "m12", sprintf("%s_sigdiff_gene_TE.txt", comp))
+  # Files are per-comparison: comparison_{comp}/m12/{comp}_te_de_sig.tsv
+  f_new <- file.path(comp_dir, "m12", sprintf("%s_te_de_sig.tsv", comp))
+  f_leg <- file.path(comp_dir, "m12", sprintf("%s_sigdiff_gene_TE.txt", comp))
   if (file.exists(f_new) && file.size(f_new) > 100) safe_read(f_new)
   else if (file.exists(f_leg))                       safe_read(f_leg)
   else NULL
 }
-tet_all     <- safe_read(file.path(out,"m12", sprintf("%s_te_de.tsv", comp)))
+tet_all     <- safe_read(file.path(comp_dir, "m12", sprintf("%s_te_de.tsv", comp)))
 trim_stats  <- safe_read(file.path(out,"trimmed","trim_stats.tsv"))
 strand_df   <- safe_read(file.path(out,"mapping","strandedness.tsv"))
 te_prom_genes   <- safe_read(file.path(out, "m11b/te_promoter_genes.tsv"))
@@ -2754,6 +2755,8 @@ if (!is.null(splicing_summary)) {
          subtitle=paste0(comp_label, " | |dPSI|>0.1"),
          x="Event type", y="Significant events") +
     theme_minimal(base_size=13)
+} else if (is_interaction) {
+  cat("Not applicable to interaction comparisons (M17 rMATS requires a two-group contrast).\n")
 } else cat("Splicing summary not available.
 ")
 ```
@@ -2769,6 +2772,8 @@ if (!is.null(splicing_summary)) {
            `Mean |dPSI|`=mean_dpsi) |>
     knitr::kable(caption="Summary of differential splicing events per type.") |>
     kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+} else if (is_interaction) {
+  cat("Not applicable to interaction comparisons (M17 rMATS requires a two-group contrast).\n")
 } else cat("Splicing summary not available.
 ")
 ```
@@ -2972,6 +2977,8 @@ if (!is.null(string_hubs) && nrow(string_hubs) > 0) {
     select(any_of(c("gene_id","gene_name","module","kME_inmodule","log2FC","padj"))) |>
     DT::datatable(caption="Top WGCNA hub genes per module (ranked by intramodular kME)",
                   options=list(pageLength=10), rownames=FALSE)
+} else if (is_interaction) {
+  cat("Not applicable to interaction comparisons (M18 is skipped for interaction terms).\n")
 } else {
   cat("WGCNA hub gene results not available — run M18 first.
 ")
@@ -3009,6 +3016,8 @@ if (!is.null(wgcna_modules) && nrow(wgcna_modules) > 0) {
     arrange(desc(n_genes)) |>
     DT::datatable(caption="WGCNA co-expression modules",
                   options=list(pageLength=15), rownames=FALSE)
+} else if (is_interaction) {
+  cat("Not applicable to interaction comparisons (M18 is skipped for interaction terms).\n")
 } else {
   cat("WGCNA results not available — run M18 first.
 ")
@@ -3155,6 +3164,8 @@ if (edges_ok) {
       caption=sprintf("Top 100 STRING PPI interactions by combined score (%s). Both genes are significantly DE.", comp_label),
       filter="top",
       options=list(pageLength=20, scrollX=TRUE), rownames=FALSE)
+} else if (is_interaction) {
+  cat("Not applicable to interaction comparisons (M18 is skipped for interaction terms).\n")
 } else cat("STRING PPI edge data not available — no interactions found between DE genes, or M18 has not been run yet.\n")
 ```
 
@@ -3175,6 +3186,8 @@ if (!is.null(editing_summary) && nrow(editing_summary) > 0) {
     knitr::kable(col.names=c("Metric","Value"),
       caption=sprintf("RNA A-to-I editing summary (JACUSA2). EF = editing frequency. dEF = EF(treatment) - EF(control). %s.", comp_label)) |>
     kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
+} else if (is_interaction) {
+  cat("Not applicable to interaction comparisons (M19 JACUSA2 requires a two-group contrast).\n")
 } else cat("RNA editing summary not available.
 ")
 ```
@@ -3200,6 +3213,8 @@ if (!is.null(editing_sites) && nrow(editing_sites) > 0) {
          x=sprintf("EF (%s)", p$control),
          y=sprintf("EF (%s)", p$treatment)) +
     theme_minimal(base_size=13)
+} else if (is_interaction) {
+  cat("Not applicable to interaction comparisons (M19 JACUSA2 requires a two-group contrast).\n")
 } else cat("Editing site data not available.
 ")
 ```
@@ -3237,6 +3252,8 @@ if (!is.null(editing_per_gene) && nrow(editing_per_gene) > 0) {
                  "(threshold: 1.5, from config thresholds.min_score_editing)."),
         options=list(pageLength=15, scrollX=TRUE), rownames=FALSE)
   }
+} else if (is_interaction) {
+  cat("Not applicable to interaction comparisons (M19 JACUSA2 requires a two-group contrast).\n")
 } else cat("Per-gene editing data not available.
 ")
 ```
