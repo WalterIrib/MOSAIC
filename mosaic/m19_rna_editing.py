@@ -368,6 +368,11 @@ def annotate_sites(df, gtf, outdir):
             ann[["chrom","start","end","gene_id","gene_name"]],
             on=["chrom","start","end"], how="left"
         )
+        # A site overlapping multiple gene intervals produces duplicate rows after
+        # the left join; keep highest-scoring row per (site, edit_type).
+        df = (df.sort_values("score", ascending=False)
+                .drop_duplicates(["chrom","start","end","edit_type"])
+                .reset_index(drop=True))
         log.info(f"Annotated: {df['gene_name'].notna().sum()} / {len(df)} sites in genes")
     except Exception as e:
         log.warning(f"Annotation failed: {e}")
