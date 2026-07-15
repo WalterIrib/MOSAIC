@@ -140,10 +140,15 @@ results are deterministic, and that the M14 report correctly names the compariso
 bash test_data/generate_test_data.sh
 
 # Run the smoke test (~20-30 min end-to-end)
-pytest tests/ -v
-# or standalone (no pytest needed):
-python tests/smoke_test.py
+conda run -n mosaic python tests/smoke_test.py
 ```
+
+> **Important:** always invoke the smoke test via `conda run -n mosaic` (or from
+> inside an activated `mosaic` environment). Running `python tests/smoke_test.py`
+> directly — e.g. with the system Python or a different env — makes `featureCounts`
+> unavailable in the subprocess PATH, causing `test_determinism_analysis_modules` to
+> fail spuriously with "Module m08_deseq2 failed" even though the code is correct.
+> pytest users: `conda run -n mosaic pytest tests/ -v`.
 
 The synthetic data intentionally produces few significant DE genes and zero
 splicing events — the goal is code-path verification, not biological validation.
