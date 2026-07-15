@@ -125,20 +125,48 @@ def run_jacusa2(args, outdir):
 
 
 # ── Parse JACUSA2 output ───────────────────────────────────────────────────────
-def parse_jacusa2(raw_out):
+def parse_jacusa2(raw_out, n_normal, n_tumor):
     """Parse JACUSA2 BED6-generic output into DataFrame.
-    
-    Column format (-f B): chrom, start, end, name, score, strand,
-    bases1(A,C,G,T), bases2(A,C,G,T), [allele_col], filter, info
-    Note: ref base not provided — inferred as most common base in condition 1.
+
+    JACUSA2 call-2 with N normal + M tumor replicates outputs per-replicate
+    base counts in separate columns:
+      parts[6 .. 6+N-1]       = ACGT counts for each normal replicate
+      parts[6+N .. 6+N+M-1]   = ACGT counts for each tumor replicate
+      parts[6+N+M]             = info field
+      parts[6+N+M+1]           = filter field
+      parts[6+N+M+2]           = genomic ref base
+
+    Aggregates (sums) base counts across all replicates for each condition
+    before returning, so downstream EF computation uses pooled condition counts.
     """
+
+    def parse_bases(b):
+        v = list(map(int, b.split(",")))
+        if len(v) == 4:
+            return {"A": v[0], "C": v[1], "G": v[2], "T": v[3]}
+        return {"A": 0, "C": 0, "G": 0, "T": 0}
+
+    def aggregate_bases(parts, col_start, n_reps):
+        agg = {"A": 0, "C": 0, "G": 0, "T": 0}
+        for i in range(n_reps):
+            b = parse_bases(parts[col_start + i])
+            for base in agg:
+                agg[base] += b[base]
+        return agg
+
+    n_rep_cols = n_normal + n_tumor
+    col_info   = 6 + n_rep_cols          # info column
+    col_filt   = 6 + n_rep_cols + 1      # filter column
+    col_ref    = 6 + n_rep_cols + 2      # genomic reference base
+    min_cols   = col_ref + 1
+
     rows = []
     with open(raw_out) as f:
         for line in f:
             if line.startswith("#"):
                 continue
             parts = line.strip().split("\t")
-            if len(parts) < 8:
+            if len(parts) < min_cols:
                 continue
 
             try:
@@ -147,24 +175,12 @@ def parse_jacusa2(raw_out):
                 end    = int(parts[2])
                 score  = float(parts[4])
                 strand = parts[5]
-                bases1_str = parts[6]
-                bases2_str = parts[7]
-                # info is last column, filter is second-to-last
-                info = parts[-1] if len(parts) > 9 else ""
-                filt = parts[-2] if len(parts) > 8 else "*"
+                info   = parts[col_info]
+                filt   = parts[col_filt]
+                ref    = parts[col_ref]
 
-                def parse_bases(b):
-                    v = list(map(int, b.split(",")))
-                    if len(v) == 4:
-                        return dict(zip("ACGT", v))
-                    return {"A":0,"C":0,"G":0,"T":0}
-
-                b1 = parse_bases(bases1_str)
-                b2 = parse_bases(bases2_str)
-
-                # Infer ref: most abundant base in normal (condition 1)
-                total1 = sum(b1.values())
-                ref = max(b1, key=b1.get) if total1 > 0 else "N"
+                b1 = aggregate_bases(parts, 6,            n_normal)
+                b2 = aggregate_bases(parts, 6 + n_normal, n_tumor)
 
                 rows.append({
                     "chrom":  chrom,
@@ -176,13 +192,14 @@ def parse_jacusa2(raw_out):
                     "A1": b1["A"], "C1": b1["C"], "G1": b1["G"], "T1": b1["T"],
                     "A2": b2["A"], "C2": b2["C"], "G2": b2["G"], "T2": b2["T"],
                     "info":   info,
-                    "filter": filt
+                    "filter": filt,
                 })
             except (ValueError, IndexError):
                 continue
 
     df = pd.DataFrame(rows)
-    log.info(f"Parsed {len(df)} JACUSA2 sites")
+    log.info(f"Parsed {len(df)} JACUSA2 sites "
+             f"({n_normal} normal + {n_tumor} tumor replicates aggregated)")
     return df
 
 
@@ -417,8 +434,11 @@ def main():
     # 1. Run JACUSA2
     raw_out = run_jacusa2(args, args.outdir)
 
-    # 2. Parse
-    df_raw = parse_jacusa2(raw_out)
+    # 2. Parse — count replicates from BAM lists so parse_jacusa2 knows column layout
+    n_normal = len([b for b in args.bam_normal.split(",") if b.strip()])
+    n_tumor  = len([b for b in args.bam_tumor.split(",")  if b.strip()])
+    log.info(f"Replicates: {n_normal} normal, {n_tumor} tumor")
+    df_raw = parse_jacusa2(raw_out, n_normal, n_tumor)
     if df_raw.empty:
         log.warning("No sites found — check coverage and parameters")
         sys.exit(0)
