@@ -153,6 +153,39 @@ All notable changes to MOSAIC are documented here.
   `configs/config_charna.yaml` already had these keys with correct
   `/path/to/...` / `${MOSAIC_REF}/` placeholders.
 
+### Removed — Dead-code module files m04_map.py and m02_trim.py
+
+- **`mosaic/m04_map.py` removed.** The file defined `star_align()` and
+  `run_m04()` but neither was ever imported or called from `pipeline.py` or any
+  other file in the codebase. The live STAR alignment implementation is
+  `_run_m04_star()` in `pipeline.py` (lines 843–918), which `pipeline.py`
+  dispatches via `getattr(self, "_run_m04_star", None)` for the `m04_star`
+  module key. Proof the dead code never ran: `star_align()` contained
+  `--outFilterMismatchNoverReadLengthMax` as a STAR parameter — a name that does
+  not exist in STAR (valid: `--outFilterMismatchNoverReadLmax`); STAR exits
+  fatally on unknown parameters, so any invocation would have aborted
+  immediately. The three STAR values cited in manuscript Methods §4.3
+  (`outFilterMultimapNmax 20`, `alignIntronMax 1,000,000`, `chimSegmentMin 20`)
+  and `twopassMode Basic` all match `_run_m04_star()` exactly.
+
+- **`mosaic/m02_trim.py` removed.** The file defined `run_fastp()`,
+  `run_trimming_all()`, `load_sample_manifest()`, and `_parse_fastp_json()` but
+  none was ever imported or called from `pipeline.py`. The live fastp
+  implementation is `_run_m02_trim()` in `pipeline.py` (lines 738–839), which
+  builds the fastp command directly via `run_cmd`. Proof the dead code never
+  ran: the canonical run log (`mosaic_output/logs/m02_trim_EP1.log`) records the
+  exact fastp invocation as `fastp … --detect_adapter_for_pe -q 20 -l 36` —
+  matching `_run_m02_trim()` exactly — with none of the additional flags that
+  `run_fastp()` in `m02_trim.py` would have added by default (`--correction`,
+  `--cut_right`, `--unqualified_percent_limit 40`). All five fastp claims in
+  manuscript Methods §4.3 (Q20, min-length 36 bp, automatic adapter detection,
+  dedup off, low-complexity filter off) are confirmed against `_run_m02_trim()`.
+
+  Both files were named after the pipeline module labels used in `config.yaml`
+  (`m02_trim`, `m04_star`), which made them superficially resemble active module
+  implementations and concealed that neither was wired into `pipeline.py`.
+  Smoke test 12/12 PASS after removal.
+
 ---
 
 ## [1.1.0] — 2026-07-06 through 2026-07-09 — Reproducibility & robustness release
