@@ -143,15 +143,22 @@ All notable changes to MOSAIC are documented here.
   requires a two-group contrast)" for rMATS (two instances), WGCNA hub genes,
   WGCNA modules, STRING PPI, and all three RNA-editing subsections.
 
-### Fixed — M15 Arriba not configured for METACAR
+### Verified — M15 Arriba ran correctly on METACAR (prior CHANGELOG entry corrected)
 
-- **`configs/config_metacar_gw.yaml` was missing `arriba_bin` and `arriba_db`**
-  in the `databases` section, so M15 fusion detection was never executed on the
-  METACAR dataset despite the Arriba binary and database being present and
-  fully functional (confirmed on De Cecco 2019). Added the two entries pointing
-  to the installed Arriba v2.4.0. Note: `config_template.yaml` and
-  `configs/config_charna.yaml` already had these keys with correct
-  `/path/to/...` / `${MOSAIC_REF}/` placeholders.
+- **A previous entry in this section incorrectly stated that "M15 fusion detection
+  was never executed on the METACAR dataset".** That entry was wrong. The canonical
+  METACAR run log (`mosaic_output/logs/m15_fusion_ChaRNA1.log`, timestamp
+  2026-03-27) shows Arriba 2.4.0 launching and completing successfully for all 12
+  samples, using the local `config.yaml` which already contained `arriba_bin` and
+  `arriba_db` pointing to the installed Arriba v2.4.0 at
+  `/home/walter/Desktop/references/arriba_v2.4.0/`.
+
+  The previous entry also referenced `configs/config_metacar_gw.yaml` as the file
+  that was missing the Arriba keys. That file was never committed to this repository
+  (only `configs/config_charna.yaml` is tracked in `configs/`), and
+  `config_charna.yaml` already contains `arriba_bin: ${MOSAIC_REF}/arriba_v2.4.0/arriba`
+  and `arriba_db: ${MOSAIC_REF}/arriba_v2.4.0/database` with correct
+  `${MOSAIC_REF}` placeholder paths. No code or config change was needed or made.
 
 ### Removed — Dead-code module files m04_map.py and m02_trim.py
 
