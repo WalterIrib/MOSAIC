@@ -193,6 +193,53 @@ All notable changes to MOSAIC are documented here.
   implementations and concealed that neither was wired into `pipeline.py`.
   Smoke test 12/12 PASS after removal.
 
+### Removed — Dead-code module file m15_fusion.py
+
+- **`mosaic/m15_fusion.py` removed.** The file defined `run_arriba()`,
+  `parse_arriba_fusions()`, `merge_fusions()`, and `run_m15()`, but none of these
+  was ever imported or called from `pipeline.py` or any other file in the codebase.
+  The live Arriba implementation is `_run_m15_fusion()` in `pipeline.py`
+  (lines 1813–1863), which builds and runs the Arriba command directly via
+  `run_cmd()` without reference to `mosaic.m15_fusion`. This is the third
+  standalone `.py` file removed for this reason (after `m04_map.py` and
+  `m02_trim.py`); all three followed the same pattern of being named after
+  pipeline module labels while duplicating logic already present inline in
+  `pipeline.py`.
+
+  **Note — m11b_promoter_te.py and m23_te_insertions.py are NOT dead code.**
+  `_run_m11b_promoter_te()` (pipeline.py:1331) and `_run_m23_te_insertions()`
+  (pipeline.py:1796) invoke their respective `.py` files as subprocess modules via
+  `sys.executable -m mosaic.m11b_promoter_te` and `sys.executable -m
+  mosaic.m23_te_insertions`. Those files contain the actual analysis logic and must
+  not be removed.
+
+### Known issues — deferred to v2.0 post-submission refactoring
+
+- **Short-circuit in comparison loop (`pipeline.py:2158`).**
+  ```python
+  ok = ok and self.runner.run_module(module, comp)
+  ```
+  Python's `and` short-circuits: once `ok` is `False` (because comparison 1 failed),
+  all subsequent comparisons for the same module are skipped without being attempted.
+  Effect: when any non-critical module fails on comparison 1, comparisons 2–N for
+  that module are silently not run. The `failed_modules` list and final warning only
+  report the module name, not which comparisons were skipped. Fix: accumulate results
+  without short-circuiting (`ok = self.runner.run_module(module, comp); all_ok &= ok`).
+  **No paper results are affected** — in the canonical METACAR run all modules
+  succeeded on all comparisons. Deferred because the fix requires changing state
+  accumulation semantics and is better handled in a full runner refactor.
+
+- **Checkpoint non-idempotence in `_should_run()` (`pipeline.py:541–552`).**
+  On a clean first run a module enters `done` state. On a second run `is_done()`
+  returns `True` and the module is correctly skipped, but `run_module()` then
+  calls `state.mark(module, "skipped")`, writing `skipped` over `done`. On a
+  third run `m.status == "skipped"` satisfies the `return True` branch at line 551,
+  causing the module to re-execute. The state cycle is therefore:
+  `done → skipped → (re-runs again) → done → …`, which is not stable.
+  **No paper results are affected** — the canonical METACAR run completed in a
+  single pass with no partial-restart scenario. Deferred pending checkpoint
+  redesign in v2.0.
+
 ---
 
 ## [1.1.0] — 2026-07-06 through 2026-07-09 — Reproducibility & robustness release
