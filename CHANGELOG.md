@@ -2,6 +2,53 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [Unreleased] — 2026-07-18/19 — Canonical number audit and GO fix
+
+### Fixed — METACAR splicing count corrected (2,032 phantom → 566 canonical)
+
+- The METACAR `comparison_mito-ChaRNA_vs_ChaRNA/m17_rmats/significant_splicing_events.tsv`
+  in a scratch directory (`METACAR_m14_fix/`) contained 2,032 events from a
+  2026-07-09 rMATS rerun (`METACAR_v1.1_genomewide_20260707`). This phantom run
+  was inadvertently used as a data source. The canonical canonical
+  `mosaic_output/comparison_mito-ChaRNA_vs_ChaRNA/m17_rmats/significant_splicing_events.tsv`
+  (2026-03-27, md5=ddf08b9f) contains 566 events (SE 177, MXE 110, RI 164,
+  A3SS 70, A5SS 45), matching the manuscript. The phantom scratch directory
+  was archived to external HD as `METACAR_m14_fix_CONTAMINATED_phantom_20260709`
+  and is no longer referenced.
+
+### Fixed — METACAR canonical go/ regenerated from canonical inputs
+
+- `comparison_mito-ChaRNA_vs_ChaRNA/go/` and `comparison_mito-totRNA_vs_totRNA/go/`
+  contained GO enrichment results from the initial (buggy) pipeline run where
+  the foreground was ~7,300 genes instead of the DE-significant set. A corrected
+  run existed only in a contaminated scratch directory (`METACAR_m14_fix/`, which
+  also contained phantom rMATS/m12 data) and was never synced to the canonical.
+  **Fix:** re-ran `m10_go.R` for both METACAR comparisons directly from canonical
+  inputs (DE-significant genes md5=df7be9ee, 1,417 genes for mito-ChaRNA).
+  Verified foreground: mito-ChaRNA UP=143, DOWN=266; mito-totRNA UP=113, DOWN=79.
+  Key result for manuscript: mito-ChaRNA GO UP shows no significant BP or CC terms;
+  single MF hit is BMP binding (GO:0036122, 4/146, padj=0.007), confirming the
+  null result described in Fig. S3. Supplementary reports S4 and S5 regenerated
+  and verified.
+
+### Fixed — SUPPA2 benchmark metric corrected in Table S6
+
+- The original Table S6 P1.4 metric compared raw event counts between SUPPA2 and
+  rMATS (SUPPA2 457 vs rMATS 627), which is not a valid comparison given different
+  tested-event sets and multiple-testing regimes. Replaced with directional
+  concordance on co-testable events: 319/430 rMATS-significant events (74%)
+  concordant in direction with SUPPA2 (binomial P<10⁻²³); ΔΨ Pearson r=0.25.
+  `tableS6_versions_perf.xlsx` and `.tsv` updated accordingly.
+
+### Documented — PAPER_NUMBERS.tsv marked non-canonical
+
+- `paper_MOSAIC/PAPER_NUMBERS.tsv` is a manually compiled reference file shown to
+  contain at least three values from superseded analyses: splicing 2,032 (phantom),
+  MXE=0 (contradicted by canonical), editing 1,915/5,493 (pre-fix JACUSA2). A
+  warning header was added to the file. Authoritative numbers are in
+  `mosaic_output/` module outputs, re-verified against canonical files on
+  2026-07-18.
+
 ## [Unreleased] — 2026-07-13/15 — Post-release fixes
 
 ### Fixed — CRITICAL: M19 RNA-editing parse_jacusa2 compared replicates within the same condition instead of across conditions
