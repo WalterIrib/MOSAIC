@@ -2,6 +2,38 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [Unreleased] — 2026-07-21 — M23 3′-breakpoint bug fix (P0)
+
+### Fixed — CRITICAL: M23 TE insertion clustering used alignment start instead of alignment end for 3′ soft-clips
+
+- **`mosaic/m23_te_insertions.py` (`parse_chimeric_sam`, lines 148–158):** for
+  reads with a 3′ soft-clip the breakpoint position was recorded as the alignment
+  start (`int(parts[3]) − 1`). The true 3′ breakpoint is the end of the aligned
+  segment: `pos + Σ(CIGAR ops that consume the reference: M, D, N, =, X)`. For a
+  typical chimeric read aligned over ~120 nt, this produces a systematic ~120 bp
+  error in recorded position for all 3′ clips.
+
+- **Impact on clustering:** `cluster_insertions()` applies single-linkage at
+  500 bp. The ~120 bp error can incorrectly merge sites in the 380–500 bp range
+  or split sites in the 500–620 bp range. In the METACAR canonical run this
+  produced 6,420 total clusters (≥2 reads); after the fix, **6,404 clusters**
+  (16 fewer, 0.25%). 7SLRNA artifacts: 1,120 → 1,111 clusters. Final count
+  after 7SLRNA/chrM exclusion: **5,293** (was 5,300 reconstructed; paper had
+  cited 5,297 which is irrecoverable from the buggy canonical).
+
+- **Numbers to update in manuscript:**
+  - Total TE insertion clusters: 6,420 → **6,404**
+  - Clusters after 7SLRNA/chrM exclusion: 5,297 → **5,293**
+
+- **Fix:** `ref_len = sum(l for l, op in cigar_ops if op in ('M','D','N','=','X'))`;
+  `clip_breakpoint = pos + ref_len if clip["position"] == "3prime" else pos`.
+  5′ clip positions unchanged (already correct).
+
+- Re-clustering performed using corrected 3′ positions patched into canonical
+  `clips_with_te_mapping.tsv` (TE alignment step not repeated; TE family
+  assignment is independent of genomic position). Output saved to
+  `/tmp/m23_fixed_output/te_insertion_clusters_fixed.tsv`.
+
 ## [Unreleased] — 2026-07-18/19 — Canonical number audit and GO fix
 
 ### Fixed — METACAR splicing count corrected (2,032 phantom → 566 canonical)

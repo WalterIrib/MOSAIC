@@ -145,16 +145,23 @@ def parse_chimeric_sam(sam_files, condition, min_clip, min_mapq):
                     strand    = "-" if (flag & 16) else "+"
                     cigar_ops = parse_cigar(cigar)
                     clips     = get_soft_clips(cigar_ops, seq, "")
+                    # ref_len: bases consumed from reference (M/D/N/=/X ops)
+                    ref_len = sum(l for l, op in cigar_ops
+                                  if op in ('M', 'D', 'N', '=', 'X'))
 
                     for clip in clips:
                         if clip["length"] < min_clip:
                             continue
+                        # 3' clip breakpoint is the END of the alignment, not the start
+                        clip_breakpoint = (pos + ref_len
+                                           if clip["position"] == "3prime"
+                                           else pos)
                         all_clips.append({
                             "read_id":   read_id,
                             "sample_id": sample_id,
                             "condition": condition,
                             "chrom":     chrom,
-                            "pos":       pos,
+                            "pos":       clip_breakpoint,
                             "strand":    strand,
                             "mapq":      mapq,
                             "clip_pos":  clip["position"],
