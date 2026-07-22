@@ -3976,24 +3976,49 @@ if (!is.null(humann_genes) && nrow(humann_genes) > 0) {
 
 # TE Somatic Insertions (M23)
 
-> Soft-clipped sequences from STAR chimeric alignments were mapped to DFAM 3.9 TE consensus sequences using BWA-MEM. Clusters of TE-mapping clips at the same genomic locus represent candidate TE insertion sites. Somatic candidates = sites detected in the treatment condition (`r params$treatment`) but not in the control (`r params$control`). **Note:** m23 runs on all samples globally; the somatic_candidate flag uses all-sample comparison, not just this pair.
+```{r m23-interaction-note, results='asis'}
+if (is_interaction) {
+  cat(paste0(
+    "::: {.callout-important}\n",
+    "**M23 — Not applicable to interaction comparisons**\n\n",
+    "M23 screens for somatic TE insertions using pairwise treatment-vs-control logic ",
+    "(`somatic_candidate` = present in treatment, absent in control). An interaction model ",
+    "has no single treatment/control axis — this comparison involves four conditions. ",
+    "No comparison-specific M23 directory exists for `ChaRNA_interaction`; the fallback ",
+    "(top-level `m23_te_insertions/`) reflects the mito-ChaRNA_vs_ChaRNA run only, ",
+    "not the interaction term. For TE insertion screening consult the ",
+    "mito-ChaRNA_vs_ChaRNA (S4) and mito-totRNA_vs_totRNA (S5) reports.\n",
+    ":::\n"))
+}
+```
 
+```{r m23-intro-text, results='asis'}
+if (!is_interaction) {
+  cat(sprintf(
+    paste0("> Soft-clipped sequences from STAR chimeric alignments were mapped to DFAM 3.9 ",
+           "TE consensus sequences using BWA-MEM. Clusters of TE-mapping clips at the same ",
+           "genomic locus represent candidate TE insertion sites. Somatic candidates = sites ",
+           "detected in the treatment condition (%s) but not in the control (%s). ",
+           "**Note:** m23 runs on all samples globally; the somatic_candidate flag uses ",
+           "all-sample comparison, not just this pair.\n"),
+    p$treatment, p$control))
+}
+```
 
 ## Insertion Summary
 
 ```{r te-insertion-summary}
-if (!is.null(te_ins_summary)) {
+if (!is_interaction && !is.null(te_ins_summary)) {
   knitr::kable(te_ins_summary,
     col.names=c("Metric","Count"),
     caption="TE insertion detection summary (M23).") |>
     kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE)
-} else cat("TE insertion summary not available.
-")
+} else if (!is_interaction) { cat("TE insertion summary not available.\n") }
 ```
 
 ## Insertion Clusters
 ```{r te-insertion-table, results='asis'}
-if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
+if (!is_interaction && !is.null(te_clusters) && nrow(te_clusters) > 0) {
   if (te_clusters_n7sl_excluded > 0)
     cat(sprintf(
       paste0("> **Note:** %d clusters matching 7SLRNA (Signal Recognition Particle RNA — ",
@@ -4020,13 +4045,24 @@ if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
                    dom="Bfrtip", buttons=c("csv","excel")),
       extensions="Buttons", rownames=FALSE, filter="top") |>
     print()
-} else cat("TE insertion cluster data not available.\n")
+} else if (!is_interaction) { cat("TE insertion cluster data not available.\n") }
 ```
 
-> **Why do cluster counts differ between conditions?** M23 counts soft-clipped reads mapping to TE consensus sequences (DFAM 3.9) at each genomic locus. Differences between conditions reflect: (1) genuine somatic TE insertions present only in one state (mitosis vs interphase); (2) differences in chromatin accessibility affecting soft-clip production — compacted mitotic chromatin may generate more artifactual clips at certain loci; (3) read depth variation between samples. Somatic candidates (`treatment-only`) require ≥1 supporting read in treatment and 0 in control. Interpret with caution: with n=3 replicates, individual-level variation can generate spurious condition-specific clusters.
+```{r m23-why-note, results='asis'}
+if (!is_interaction)
+  cat(paste0("> **Why do cluster counts differ between conditions?** M23 counts soft-clipped ",
+             "reads mapping to TE consensus sequences (DFAM 3.9) at each genomic locus. ",
+             "Differences between conditions reflect: (1) genuine somatic TE insertions present ",
+             "only in one state (mitosis vs interphase); (2) differences in chromatin accessibility ",
+             "affecting soft-clip production — compacted mitotic chromatin may generate more ",
+             "artifactual clips at certain loci; (3) read depth variation between samples. ",
+             "Somatic candidates (`treatment-only`) require ≥1 supporting read in treatment and ",
+             "0 in control. Interpret with caution: with n=3 replicates, individual-level variation ",
+             "can generate spurious condition-specific clusters.\n"))
+```
 
 ```{r te-somatic-plot, fig.height=7, fig.width=12, fig.cap="TE insertion clusters by macrocategory and condition origin. 'Shared' = detected in both conditions; '[treatment]-only' = somatic candidate (present in treatment, absent in control); '[control]-only' = candidate absent in treatment. Left: cluster count per macrocategory; right: total supporting reads. Numbers above bars = cluster count."}
-if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
+if (!is_interaction && !is.null(te_clusters) && nrow(te_clusters) > 0) {
   # Determine per-condition count columns (support both n_normal/n_tumor and n_control/n_treatment)
   nc_col <- if ("n_control"   %in% colnames(te_clusters)) "n_control"   else
             if ("n_normal"    %in% colnames(te_clusters)) "n_normal"    else NULL
@@ -4096,13 +4132,13 @@ if (!is.null(te_clusters) && nrow(te_clusters) > 0) {
     .te_origin_summary <- NULL
   }
 } else {
-  cat("TE cluster data not available.\n")
+  if (!is_interaction) cat("TE cluster data not available.\n")
   .te_origin_summary <- NULL
 }
 ```
 
 ```{r te-somatic-summary-table, results='asis', echo=FALSE}
-if (!is.null(.te_origin_summary) && nrow(.te_origin_summary) > 0) {
+if (!is_interaction && !is.null(.te_origin_summary) && nrow(.te_origin_summary) > 0) {
   cat("\n**Cluster summary by origin:**\n\n")
   .te_origin_summary |>
     knitr::kable(col.names=c("Origin","Clusters","Total reads","% of clusters"),
