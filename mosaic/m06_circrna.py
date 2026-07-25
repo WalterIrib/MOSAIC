@@ -1,8 +1,14 @@
 """
 mosaic/m06_circrna.py
-M06 — circRNA detection (CIRI2) using STAR chimeric alignments.
-STAR chimeric SAMs from M04 replace BWA-MEM alignments.
-Eliminates BWA dependency; chimeric detection is more sensitive with STAR.
+M06 — circRNA detection (DCC) using STAR chimeric junction files.
+
+M04 must produce Chimeric.out.junction via:
+  --chimOutType SeparateSAMold Junctions
+Chimeric.out.sam is unchanged (SeparateSAMold remains); Junctions adds the
+junction file required by DCC.  Zero impact on SAM content (Opzione C,
+validated: 411,561 alignment lines, identical to canonical).
+
+DCC ref: Zeng et al., Nucleic Acids Res. 2017; tool: bioconda dcc=0.5.0.
 """
 from __future__ import annotations
 import csv, subprocess
@@ -10,76 +16,92 @@ from pathlib import Path
 from typing import Optional
 from .log import info, warn, error, success, section
 
+# Maps M07 strandedness labels to DCC flags.
+# Convention in this codebase (pipeline.py strandedness_to_featurecounts):
+#   RF = "1++,1--" = R1 same as gene = featureCounts -s 1
+#   FR = "1+-,1-+" = R2 same as gene = featureCounts -s 2
+# DCC -s  = sense  (R1 on same strand as circRNA) → matches RF
+# DCC -ss = anti-sense (R1 opposite to circRNA)   → matches FR
+# Validated: De Cecco M07-FR samples ran correctly with DCC -ss in batch script.
+_STRAND_MAP = {
+    "unstranded": "-N",
+    "auto":       "-N",   # safe fallback when M07 not yet run
+    "rf":         "-s",   # R1 sense → DCC -s
+    "fr":         "-ss",  # R2 sense, R1 antisense → DCC -ss
+}
+
+
+def _strand_flag(strandedness: str) -> str:
+    return _STRAND_MAP.get(strandedness.lower().strip(), "-N")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CIRI2 runner (input: STAR Chimeric.out.sam)
+# DCC runner
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_ciri2(
-    chimeric_sam: Path,
-    genome_fa: Path,
+def run_dcc(
+    junction_file: Path,
     gtf: Path,
     out_dir: Path,
     sample_id: str,
-    ciri2_pl: str = "CIRI2.pl",
-    threads: int = 16,
+    dcc_bin: str = "DCC",
+    strandedness: str = "unstranded",
+    threads: int = 8,
     min_junction_reads: int = 2,
 ) -> Optional[Path]:
     """
-    Run CIRI2 on STAR Chimeric.out.sam.
+    Run DCC on STAR Chimeric.out.junction.
+    Returns path to CircRNACount, or None on failure.
 
-    STAR chimeric SAM is compatible with CIRI2 as BWA-MEM SAM replacement.
-    Key: STAR must be run with --chimOutType SeparateSAMold and
-         --chimSegmentMin >=20 for optimal junction detection.
-
-    Returns path to .ciri output file, or None on failure.
+    DCC exits RC=1 at the optional CircSkipJunction step (GENCODE exon_id
+    trailing-quote bug in Circ_nonCirc_Exon_Match.py line 222) — this occurs
+    AFTER CircRNACount is written and is non-fatal for our use case.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir / f"{sample_id}.ciri"
-    log_file = out_dir / f"{sample_id}_ciri2.log"
+    count_file = out_dir / "CircRNACount"
+    log_file   = out_dir / "dcc.log"
 
-    if not chimeric_sam.exists() or chimeric_sam.stat().st_size == 0:
-        warn(f"[{sample_id}] No chimeric SAM — skipping CIRI2")
+    if not junction_file.exists() or junction_file.stat().st_size == 0:
+        warn(f"[{sample_id}] No junction file — skipping DCC")
         return None
 
-    info(f"[{sample_id}] CIRI2 on {chimeric_sam.name}...")
+    sflag = _strand_flag(strandedness)
+    info(f"[{sample_id}] DCC on {junction_file.name} ({sflag})...")
 
     cmd = [
-        "perl", ciri2_pl,
-        "-I", str(chimeric_sam),
-        "-O", str(out_file),
-        "-F", str(genome_fa),
-        "-A", str(gtf),
+        dcc_bin,
+        str(junction_file),
+        "-D",
+        sflag,
+        "-F",
+        "-Nr", str(min_junction_reads), "1",
+        "-an", str(gtf),
         "-T", str(threads),
-        "-0",   # report all junction reads (min=0; we filter later)
+        "-O", str(out_dir),
     ]
 
     with open(log_file, "w") as lf:
-        result = subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, text=True)
+        subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, text=True)
 
-    if result.returncode != 0:
-        error(f"[{sample_id}] CIRI2 failed (check {log_file})")
+    if not count_file.exists() or count_file.stat().st_size == 0:
+        error(f"[{sample_id}] DCC failed — CircRNACount missing (check {log_file})")
         return None
 
-    if not out_file.exists() or out_file.stat().st_size == 0:
-        warn(f"[{sample_id}] CIRI2 produced empty output")
-        return None
-
-    n = _count_ciri_entries(out_file, min_junction_reads)
-    info(f"[{sample_id}] CIRI2: {n} circRNA (>= {min_junction_reads} junction reads)")
-    return out_file
+    n = _count_entries(count_file, min_junction_reads)
+    info(f"[{sample_id}] DCC: {n} circRNA (>= {min_junction_reads} junction reads)")
+    return count_file
 
 
-def _count_ciri_entries(ciri_file: Path, min_junc: int = 2) -> int:
+def _count_entries(count_file: Path, min_junc: int = 2) -> int:
     count = 0
-    with open(ciri_file) as f:
-        for line in f:
-            if line.startswith("#"):
+    with open(count_file) as f:
+        for i, line in enumerate(f):
+            if i == 0:
                 continue
             parts = line.strip().split("\t")
-            if len(parts) >= 5:
+            if len(parts) >= 4:
                 try:
-                    if int(parts[4]) >= min_junc:
+                    if int(parts[3]) >= min_junc:
                         count += 1
                 except ValueError:
                     pass
@@ -87,103 +109,111 @@ def _count_ciri_entries(ciri_file: Path, min_junc: int = 2) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Parse CIRI2 output
+# Parse DCC output
 # ─────────────────────────────────────────────────────────────────────────────
 
-def parse_ciri2(ciri_file: Path, sample_id: str,
-                min_junction_reads: int = 2) -> list[dict]:
+def parse_dcc(
+    out_dir: Path,
+    sample_id: str,
+    min_junction_reads: int = 2,
+) -> list[dict]:
     """
-    Parse CIRI2 .ciri output.
-    Returns list of dicts with circRNA locus info.
+    Parse DCC CircRNACount + CircCoordinates from out_dir.
 
-    CIRI2 columns (v2.0.6):
-    0: circRNA_ID, 1: chr, 2: circRNA_start, 3: circRNA_end,
-    4: #junction_reads, 5: SM_MS_SMS, 6: #non_junction_reads,
-    7: junction_reads_ratio, 8: circRNA_type, 9: gene_id,
-    10: strand, 11: junction_reads_ID
+    CircRNACount columns: Chr, Start, End, <sample>_Chimeric.out.junction
+    CircCoordinates cols: Chr, Start, End, Gene, JunctionType, Strand, ...
     """
-    records = []
-    if ciri_file is None or not ciri_file.exists():
+    count_file = out_dir / "CircRNACount"
+    coord_file = out_dir / "CircCoordinates"
+    records: list[dict] = []
+
+    if not count_file.exists():
         return records
 
-    with open(ciri_file) as f:
-        for line in f:
-            if line.startswith("#"):
+    # Load gene annotation from CircCoordinates (keyed by chr:start:end)
+    coord_map: dict[tuple, dict] = {}
+    if coord_file.exists():
+        with open(coord_file) as f:
+            for i, line in enumerate(f):
+                if i == 0:
+                    continue
+                parts = line.strip().split("\t")
+                if len(parts) >= 6:
+                    key = (parts[0], parts[1], parts[2])
+                    coord_map[key] = {
+                        "gene_id": parts[3],
+                        "strand":  parts[5],
+                    }
+
+    with open(count_file) as f:
+        for i, line in enumerate(f):
+            if i == 0:
                 continue
             parts = line.strip().split("\t")
-            if len(parts) < 10:
+            if len(parts) < 4:
                 continue
             try:
-                junc_reads = int(parts[4])
+                junc_reads = int(parts[3])
             except ValueError:
                 continue
             if junc_reads < min_junction_reads:
                 continue
+            key = (parts[0], parts[1], parts[2])
+            ann = coord_map.get(key, {})
             records.append({
                 "sample_id":      sample_id,
-                "circRNA_id":     parts[0],
-                "chr":            parts[1],
-                "start":          int(parts[2]),
-                "end":            int(parts[3]),
+                "circRNA_id":     f"{parts[0]}:{parts[1]}-{parts[2]}",
+                "chr":            parts[0],
+                "start":          int(parts[1]),
+                "end":            int(parts[2]),
                 "junction_reads": junc_reads,
-                "circ_type":      parts[8] if len(parts) > 8 else "unknown",
-                "gene_id":        parts[9] if len(parts) > 9 else "",
-                "strand":         parts[10] if len(parts) > 10 else ".",
+                "gene_id":        ann.get("gene_id", "not_annotated"),
+                "strand":         ann.get("strand", "."),
+                "circ_type":      "exon",
             })
     return records
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Merge circRNA across samples
+# Merge across samples
 # ─────────────────────────────────────────────────────────────────────────────
 
 def merge_circrna(
     sample_records: dict[str, list[dict]],
-    coord_tolerance: int = 10,
 ) -> tuple[dict, dict]:
     """
-    Merge circRNA loci across samples using coordinate tolerance.
-    Returns (count_matrix, annotation).
-    count_matrix: {locus_id: {sample_id: n_junc_reads}}
-    annotation:   {locus_id: {chr, start, end, circ_type, gene_id, strand, n_samples}}
+    Merge circRNA loci across samples using exact coordinates.
+    DCC uses the same junction file format for all samples, so coordinates
+    are reproducible and exact matching is correct (no tolerance needed).
+
+    Returns (count_matrix, annotation):
+      count_matrix: {locus_id: {sample_id: junction_reads}}
+      annotation:   {locus_id: {chr, start, end, gene_id, strand, n_samples_detected}}
     """
-    # Collect all loci
-    all_loci = {}  # locus_id -> canonical coords
+    all_loci: dict[str, dict] = {}
 
     for sid, records in sample_records.items():
         for r in records:
-            matched = None
-            for lid, locus in all_loci.items():
-                if (r["chr"] == locus["chr"] and
-                    abs(r["start"] - locus["start"]) <= coord_tolerance and
-                    abs(r["end"]   - locus["end"])   <= coord_tolerance):
-                    matched = lid
-                    break
-            if matched is None:
-                lid = f"{r['chr']}:{r['start']}-{r['end']}"
+            lid = r["circRNA_id"]
+            if lid not in all_loci:
                 all_loci[lid] = {
                     "chr":       r["chr"],
                     "start":     r["start"],
                     "end":       r["end"],
-                    "circ_type": r["circ_type"],
                     "gene_id":   r["gene_id"],
                     "strand":    r["strand"],
+                    "circ_type": r["circ_type"],
                 }
 
-    # Build count matrix
     all_samples = list(sample_records.keys())
     count_matrix = {lid: {s: 0 for s in all_samples} for lid in all_loci}
 
     for sid, records in sample_records.items():
         for r in records:
-            for lid, locus in all_loci.items():
-                if (r["chr"] == locus["chr"] and
-                    abs(r["start"] - locus["start"]) <= coord_tolerance and
-                    abs(r["end"]   - locus["end"])   <= coord_tolerance):
-                    count_matrix[lid][sid] += r["junction_reads"]
-                    break
+            lid = r["circRNA_id"]
+            if lid in count_matrix:
+                count_matrix[lid][sid] = r["junction_reads"]
 
-    # Annotation with n_samples_detected
     annotation = {}
     for lid, locus in all_loci.items():
         n_det = sum(1 for s in all_samples if count_matrix[lid][s] > 0)
@@ -193,7 +223,7 @@ def merge_circrna(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Differential expression (Wilcoxon fallback for n < 3)
+# Differential expression (Wilcoxon fallback for small n)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def circrna_de(
@@ -202,11 +232,11 @@ def circrna_de(
     conditions: dict[str, str],
     treatment: str,
     control: str,
-    padj_threshold: float = 0.05,
 ) -> list[dict]:
     """
     DE for circRNA using Wilcoxon rank-sum (scipy) — robust for small n.
     Falls back to fold-change only if n < 2 per group.
+    BH correction applied when statsmodels is available.
     """
     try:
         from scipy.stats import mannwhitneyu
@@ -218,17 +248,16 @@ def circrna_de(
     treat_samples = [s for s, c in conditions.items() if c == treatment]
     ctrl_samples  = [s for s, c in conditions.items() if c == control]
 
-    results = []
-    loci_ids = list(count_matrix.keys())
-    pvalues  = []
+    results: list[dict] = []
+    pvalues: list[float] = []
 
-    for lid in loci_ids:
+    for lid in count_matrix:
         t_counts = [count_matrix[lid].get(s, 0) for s in treat_samples]
         c_counts = [count_matrix[lid].get(s, 0) for s in ctrl_samples]
 
-        mean_t = np.mean(t_counts) if t_counts else 0
-        mean_c = np.mean(c_counts) if c_counts else 0
-        lfc = np.log2((mean_t + 1) / (mean_c + 1))
+        mean_t = float(np.mean(t_counts)) if t_counts else 0.0
+        mean_c = float(np.mean(c_counts)) if c_counts else 0.0
+        lfc    = float(np.log2((mean_t + 1) / (mean_c + 1)))
 
         if len(treat_samples) >= 2 and len(ctrl_samples) >= 2:
             _, pval = mannwhitneyu(t_counts, c_counts, alternative="two-sided")
@@ -237,30 +266,26 @@ def circrna_de(
 
         pvalues.append(pval)
         results.append({
-            "circRNA_id":       lid,
-            "chr":              annotation[lid]["chr"],
-            "start":            annotation[lid]["start"],
-            "end":              annotation[lid]["end"],
-            "circ_type":        annotation[lid]["circ_type"],
-            "gene_id":          annotation[lid]["gene_id"],
+            "circRNA_id":         lid,
+            "chr":                annotation[lid]["chr"],
+            "start":              annotation[lid]["start"],
+            "end":                annotation[lid]["end"],
+            "gene_id":            annotation[lid]["gene_id"],
+            "strand":             annotation[lid]["strand"],
             "n_samples_detected": annotation[lid]["n_samples_detected"],
-            "mean_treatment":   round(mean_t, 3),
-            "mean_control":     round(mean_c, 3),
-            "log2FoldChange":   round(lfc, 4),
-            "pvalue":           pval,
+            "mean_treatment":     round(mean_t, 3),
+            "mean_control":       round(mean_c, 3),
+            "log2FoldChange":     round(lfc, 4),
+            "pvalue":             pval,
         })
 
-    # BH correction
     try:
         from statsmodels.stats.multitest import multipletests
-        import numpy as np
         _, padjs, _, _ = multipletests(np.array(pvalues), method="fdr_bh")
     except ImportError:
-        # manual BH
-        import numpy as np
         n = len(pvalues)
         ranked = np.argsort(pvalues)
-        padjs  = np.empty(n)
+        padjs = np.empty(n)
         for i, idx in enumerate(ranked):
             padjs[idx] = min(pvalues[idx] * n / (i + 1), 1.0)
 
@@ -272,65 +297,68 @@ def circrna_de(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main M06 runner
+# Main M06 entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_m06(cfg, chimeric_sams: dict[str, Path]) -> dict:
+def run_m06(cfg, chimeric_junctions: dict[str, Path]) -> dict:
     """
     M06 pipeline:
-    1. Run CIRI2 on each STAR chimeric SAM
-    2. Merge circRNA loci across samples
-    3. Build count matrix and annotation
-    4. Differential expression (Wilcoxon)
+    1. Run DCC on each Chimeric.out.junction
+    2. Merge circRNA loci across samples (exact coordinates)
+    3. Build count matrix + annotation TSVs
+    4. Differential expression (Wilcoxon rank-sum + BH)
     """
-    section("M06 — circRNA detection (CIRI2 + STAR chimeric)")
+    section("M06 — circRNA detection (DCC + STAR chimeric junctions)")
 
-    out_dir        = Path(cfg.output_dir) / "circrna"
-    merged_dir     = Path(cfg.output_dir) / "circrna_merged"
+    out_dir    = Path(cfg.output_dir) / "circrna"
+    merged_dir = Path(cfg.output_dir) / "circrna_merged"
     out_dir.mkdir(parents=True, exist_ok=True)
     merged_dir.mkdir(parents=True, exist_ok=True)
 
-    genome_fa = Path(cfg.genome_fa)
-    gtf       = Path(cfg.gtf)
-    ciri2_pl  = getattr(cfg, "ciri2_path", "CIRI2.pl")
-    threads   = getattr(cfg, "threads", 16)
-    min_junc  = getattr(cfg, "min_junction_reads", 2)
-    treatment = getattr(cfg, "treatment", "tumor")
-    control   = getattr(cfg, "control",   "normal")
-    samples   = cfg.samples
+    gtf          = Path(cfg.gtf)
+    dcc_bin      = getattr(cfg, "dcc_path",           "DCC")
+    threads      = getattr(cfg, "threads",             8)
+    min_junc     = getattr(cfg, "min_junction_reads",  2)
+    treatment    = getattr(cfg, "treatment",           "tumor")
+    control      = getattr(cfg, "control",             "normal")
+    strandedness = getattr(cfg, "strandedness",        "unstranded")
+    samples      = cfg.samples
 
     conditions = {s["sample_id"]: s["condition"] for s in samples}
 
-    # 1. CIRI2 per sample
+    # 1. DCC per sample
     sample_records: dict[str, list[dict]] = {}
     for s in samples:
         sid = s["sample_id"]
-        chim = chimeric_sams.get(sid)
-        if chim is None:
-            warn(f"[{sid}] No chimeric SAM from M04 — skipping")
+        jxn = chimeric_junctions.get(sid)
+        if jxn is None:
+            warn(f"[{sid}] No junction file from M04 — skipping")
             sample_records[sid] = []
             continue
 
-        ciri_out = run_ciri2(
-            chimeric_sam=chim,
-            genome_fa=genome_fa,
+        sample_out = out_dir / sid
+        # Per-sample strandedness override from coldata if available
+        s_strand = s.get("strandedness", strandedness)
+        count_file = run_dcc(
+            junction_file=jxn,
             gtf=gtf,
-            out_dir=out_dir,
+            out_dir=sample_out,
             sample_id=sid,
-            ciri2_pl=ciri2_pl,
+            dcc_bin=dcc_bin,
+            strandedness=s_strand,
             threads=threads,
             min_junction_reads=min_junc,
         )
-        sample_records[sid] = parse_ciri2(ciri_out, sid, min_junc) if ciri_out else []
+        sample_records[sid] = parse_dcc(sample_out, sid, min_junc) if count_file else []
 
     total = sum(len(v) for v in sample_records.values())
-    info(f"CIRI2 total records across samples: {total}")
+    info(f"DCC total records across samples: {total}")
 
-    # 2. Merge
-    count_matrix, annotation = merge_circrna(sample_records, coord_tolerance=10)
+    # 2. Merge loci
+    count_matrix, annotation = merge_circrna(sample_records)
     info(f"Merged circRNA loci: {len(count_matrix)}")
 
-    # 3. Save count matrix
+    # 3. Count matrix TSV
     all_samples = [s["sample_id"] for s in samples]
     counts_path = merged_dir / "circrna_counts.tsv"
     with open(counts_path, "w", newline="") as f:
@@ -339,24 +367,28 @@ def run_m06(cfg, chimeric_sams: dict[str, Path]) -> dict:
         for lid in sorted(count_matrix):
             w.writerow([lid] + [count_matrix[lid].get(s, 0) for s in all_samples])
 
-    # 4. Save annotation
+    # 4. Annotation TSV
     annot_path = merged_dir / "circrna_annotation.tsv"
     with open(annot_path, "w", newline="") as f:
         if annotation:
-            w = csv.DictWriter(f, fieldnames=list(next(iter(annotation.values())).keys()) +
-                               ["circRNA_id"], delimiter="\t")
+            first = next(iter(annotation.values()))
+            w = csv.DictWriter(
+                f,
+                fieldnames=["circRNA_id"] + list(first.keys()),
+                delimiter="\t",
+            )
             w.writeheader()
             for lid, ann in sorted(annotation.items()):
-                w.writerow({**ann, "circRNA_id": lid})
+                w.writerow({"circRNA_id": lid, **ann})
 
     # 5. DE
-    de_results = circrna_de(count_matrix, annotation, conditions,
-                            treatment, control)
+    de_results = circrna_de(count_matrix, annotation, conditions, treatment, control)
     de_path = merged_dir / "circrna_DE_wilcoxon.tsv"
     if de_results:
         with open(de_path, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=de_results[0].keys(), delimiter="\t")
-            w.writeheader(); w.writerows(de_results)
+            w.writeheader()
+            w.writerows(de_results)
 
     success(f"M06 complete — {len(count_matrix)} circRNA loci")
     return {

@@ -16,8 +16,9 @@
 #     - HUMAnN3 / MetaPhlAn (optional M20b) -> conda env "humann3"
 # * Binary/script tools not on conda (paths set in config.yaml):
 #     - Arriba 2.4.0        (M15; download binary release)
-#     - CIRI2 2.0.6         (M06; Perl script)
 #   JACUSA2 2.1.16 IS provided by bioconda (jar under share/).
+#   DCC 0.5.0 IS provided by bioconda (see below).
+#   CIRI2 removed in v1.1.1: M06 now uses DCC on STAR chimeric junction files.
 # * Known transitive dependency not listed explicitly: blast-2.17.0
 #   (pulled in via kraken2 or suppa). Not used directly by MOSAIC scripts.
 name: mosaic
@@ -50,6 +51,7 @@ dependencies:
   - salmon=2.2.1                 # §4.8
   # ── RNA editing ────────────────────────────────────────────────────────────
   - jacusa2=2.1.16               # M19
+  - dcc=0.5.0                    # M06 circRNA detection (STAR chimeric junctions)
   - bwa=0.7.19                   # M23 TE insertion detection (default aligner)
   # ── Metatranscriptomics (optional M20) ─────────────────────────────────────
   - kraken2=2.17.1

@@ -127,7 +127,7 @@ modules:
   m02_trim:         true   # fastp trimming
   m04_star:         true   # STAR two-pass alignment
   m05_te_count:     true   # TE quantification (pseudochromosomes)
-  m06_circrna:      true   # circRNA detection (CIRI2)
+  m06_circrna:      true   # circRNA detection (DCC, STAR chimeric junctions)
   m07_strandedness: true   # strandedness inference (RSeQC)
   m08_deseq2:       true   # differential expression
   m09_satellite:    true   # satellite quantification

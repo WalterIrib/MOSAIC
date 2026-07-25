@@ -783,7 +783,7 @@ if (is_interaction) {
 }
 ```
 
-```{r rna-landscape-linear, fig.height=11, fig.width=9, fig.cap="Transcriptome composition — percentage of total normalised counts per RNA biotype and condition (linear scale). Left button toggles to log10. Top panel: all biotypes including protein-coding. Bottom panel: detail excluding protein-coding, with RS split by TE macrocategory. Error bars: SD across samples within condition. Biotypes from GENCODE v49; RS from DFAM 3.9 pseudochromosomes; circRNA from CIRI2."}
+```{r rna-landscape-linear, fig.height=11, fig.width=9, fig.cap="Transcriptome composition — percentage of total normalised counts per RNA biotype and condition (linear scale). Left button toggles to log10. Top panel: all biotypes including protein-coding. Bottom panel: detail excluding protein-coding, with RS split by TE macrocategory. Error bars: SD across samples within condition. Biotypes from GENCODE v49; RS from DFAM 3.9 pseudochromosomes; circRNA from DCC."}
 if (!is.null(rna_plot_data)) {
   p1 <- make_rna_panel(rna_plot_data$pct_agg, FALSE, "%.1f%%",
                         "All biotypes (linear scale)",
@@ -2329,7 +2329,7 @@ if (!is.null(go_body_te_cc) && nrow(go_body_te_cc) > 0)
 ```{r circ-summary}
 if (!is.null(circ_annot) && nrow(circ_annot)>0) {
   kable(circ_annot |> arrange(desc(n_samples_detected)),
-        caption="Detected circRNA loci after cross-sample merging (CIRI2, BWA-MEM, coordinate tolerance ±10bp). circ_type: CIRI2 classification (exonic, intronic, intergenic_region). n_samples_detected: samples with ≥2 supporting back-splice junction reads.") |>
+        caption="Detected circRNA loci after cross-sample merging (DCC on STAR chimeric junctions). gene_id: host gene from DCC/GENCODE annotation ('not_annotated' if unannotated). n_samples_detected: samples with ≥2 supporting back-splice junction reads.") |>
     kable_styling(bootstrap_options=c("striped","hover","condensed"))
 } else {
   cat("No circRNA detected at current thresholds (min 2 junction reads per sample).\n")
@@ -4160,7 +4160,7 @@ if (!is_interaction && !is.null(.te_origin_summary) && nrow(.te_origin_summary) 
 
 ## Read Processing
 
-Reads trimmed with fastp 0.22.0 (auto adapter detection, Q20, min length 36bp). Genome alignment: STAR 2.7.10b two-pass mode with GENCODE v49 splice site annotation (`--twopassMode Basic`, `--outReadsUnmapped Fastx`). Strandedness inferred per-sample with RSeQC infer_experiment.py; library strandedness set in config (`sequencing.strandedness`). Gene counts: featureCounts (subread 2.0.6), `-t exon -g gene_id -s 2 --fracOverlap 0.1 -p --countReadPairs` (strandedness flag set from config value, not from RSeQC per-sample detection — config takes precedence for all quantification). circRNA detection: STAR chimeric alignments (`--chimOutType SeparateSAMold`, `--chimSegmentMin 20`) → CIRI2 v2.0.6. Unmapped reads classified taxonomically with Kraken2 + Bracken v2.1.3 (paired-end mode, species-level re-estimation). RNA editing: JACUSA2 v2.1.16 call-2 (`-filterNH 1`). TE somatic insertions: soft-clipped sequences from STAR chimeric SAM aligned to DFAM 3.9 TE consensus with BWA-MEM 0.7.18.
+Reads trimmed with fastp 0.22.0 (auto adapter detection, Q20, min length 36bp). Genome alignment: STAR 2.7.10b two-pass mode with GENCODE v49 splice site annotation (`--twopassMode Basic`, `--outReadsUnmapped Fastx`). Strandedness inferred per-sample with RSeQC infer_experiment.py; library strandedness set in config (`sequencing.strandedness`). Gene counts: featureCounts (subread 2.0.6), `-t exon -g gene_id -s 2 --fracOverlap 0.1 -p --countReadPairs` (strandedness flag set from config value, not from RSeQC per-sample detection — config takes precedence for all quantification). circRNA detection: STAR chimeric junction files (`--chimOutType SeparateSAMold Junctions`, `--chimSegmentMin 20`, `--chimJunctionOverhangMin 15`) → DCC v0.5.0 (`-D -F -Nr 2 1`). Chimeric.out.sam output is unchanged (SeparateSAMold retained for M15/M23 compatibility). Unmapped reads classified taxonomically with Kraken2 + Bracken v2.1.3 (paired-end mode, species-level re-estimation). RNA editing: JACUSA2 v2.1.16 call-2 (`-filterNH 1`). TE somatic insertions: soft-clipped sequences from STAR chimeric SAM aligned to DFAM 3.9 TE consensus with BWA-MEM 0.7.18.
 
 ## TE Quantification — Pseudochromosome Approach
 

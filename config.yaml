@@ -1,0 +1,91 @@
+comparisons:
+- control: normal
+  treatment: tumor
+databases:
+  arriba_bin: /home/walter/Desktop/references/arriba_v2.4.0/arriba
+  dcc_path: DCC
+  arriba_db: /home/walter/Desktop/references/arriba_v2.4.0/database
+  auto_download: true
+  chocophlan_db: /home/walter/Desktop/references/humann3_db/chocophlan
+  db_root: /home/walter/Desktop/references
+  genome_fa: /home/walter/Desktop/references/GRCh38.primary_assembly.genome.fa
+  gtf: /home/walter/Desktop/references/gencode.v49.annotation.gtf
+  gtf_bed12: /home/walter/Desktop/mosaic/mosaic_output/mapping/annotation/genes.bed12
+  kraken2_db: /home/walter/Desktop/references/kraken2_db
+  metaphlan_db: /home/walter/Desktop/references/humann3_db/metaphlan_db
+  rmsk_bed: /home/walter/Desktop/references/rmsk/rmsk.txt.gz
+  star_index: /home/walter/Desktop/references/star_index
+  te_consensus: /home/walter/Desktop/references/dfam/pseudochromosomes/consensus_TE.fa
+  te_gtf: /home/walter/Desktop/references/rmsk/TE.gtf
+  te_satellite: /home/walter/Desktop/references/dfam/pseudochromosomes/consensus_satellite.fa
+  uniref_db: /home/walter/Desktop/references/humann3_db/uniref
+environments:
+  arriba: null
+  humann: humann3
+  main: mosaic
+library:
+  layout: PE
+  prep: rRNA_depletion
+memory_gb: 30
+modules:
+  m00_download: false
+  m02_trim: true
+  m04_star: true
+  m05_te_count: true
+  m06_circrna: true
+  m07_strandedness: true
+  m08_deseq2: true
+  m08b_qc: true
+  m09_satellite: true
+  m10_go: true
+  m11_te_host: true
+  m11b_promoter_te: true
+  m11c_te_age: true
+  m11d_te_de: true
+  m12_tetranscripts: true
+  m14_report: true
+  m15_fusion: true
+  m16_stringtie: true
+  m17_rmats: true
+  m18_network: true
+  m19_editing: true
+  m20_meta: true
+  m20b_humann: true
+  m23_te_insertions: true
+project:
+  annotation_version: gencode_v49
+  biological_context: tumor
+  genome_build: hg38
+  name: mosaic_tumor_vs_normal
+  organism: human
+  random_seed: 42
+  wd: /home/walter/Desktop/mosaic
+report:
+  produce_pdf: false
+  remove_test_notes: true
+  title: MOSAIC Analysis Report
+samples:
+  coldata: /home/walter/Desktop/mosaic/mosaic_output/coldata.tsv
+  fastq_dir: /home/walter/Desktop/mosaic/fastq
+sequencing:
+  read_length: 150
+  strandedness: auto
+  type: PE
+threads: 20
+thresholds:
+  editing_model: DirMult:PHRED
+  lfc: 1.0
+  min_clip_te: 30
+  min_cov_editing: 5
+  min_ef_editing: 0.05
+  min_reads_meta: 10
+  min_reads_splicing: 10
+  min_samples_meta: 2
+  min_score_editing: 1.5
+  min_support_te: 2
+  padj: 0.05
+trimming:
+  low_complexity_filter: false
+  min_length: 36
+  min_phred: 20
+  trim_poly_x: false

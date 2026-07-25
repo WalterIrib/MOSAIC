@@ -689,48 +689,72 @@ class ModuleRunner:
 
         return True
 
-    # ── M06: circRNA detection (CIRI2) ──────────────────────────────────────
+    # ── M06: circRNA detection (DCC) ────────────────────────────────────────
 
     def _run_m06_circrna(self, comparison=None) -> bool:
         from .m06_circrna import run_m06
         cfg     = self.cfg
         bam_dir = self.out / "mapping" / "bam"
 
-        ciri2_pl = cfg.databases.ciri2_path or "CIRI2.pl"
+        dcc_bin = cfg.databases.dcc_path or "DCC"
         import shutil as _sh
-        if not Path(ciri2_pl).exists() and not _sh.which("CIRI2.pl"):
-            warn("CIRI2.pl not found — skipping m06_circrna")
+        if not Path(dcc_bin).exists() and not _sh.which(dcc_bin):
+            warn("DCC not found — skipping m06_circrna")
             return True   # non-fatal skip
 
-        chimeric_sams = {}
+        chimeric_junctions = {}
         for sid in cfg.samples.sample_ids:
-            chim = bam_dir / sid / f"{sid}_Chimeric.out.sam"
-            if chim.exists():
-                chimeric_sams[sid] = chim
+            jxn = bam_dir / sid / f"{sid}_Chimeric.out.junction"
+            if jxn.exists():
+                chimeric_junctions[sid] = jxn
 
-        if not chimeric_sams:
-            warn("No chimeric SAMs found — run m04_star first")
+        if not chimeric_junctions:
+            warn("No Chimeric.out.junction files found — run m04_star first")
             return False
 
         comp = self._parse_comparison(comparison)
         treatment, control = comp if comp else (None, None)
 
-        # Patch cfg so run_m06 can access what it needs
-        cfg_m06      = type("C", (), {})()
-        cfg_m06.output_dir          = str(self.out)
-        cfg_m06.genome_fa           = str(Path(cfg.databases.genome_fa))
-        cfg_m06.gtf                 = str(Path(cfg.databases.gtf))
-        cfg_m06.ciri2_path          = ciri2_pl
-        cfg_m06.threads             = cfg.threads
-        cfg_m06.min_junction_reads  = 2
-        cfg_m06.treatment           = treatment or "tumor"
-        cfg_m06.control             = control  or "normal"
+        # Global fallback strandedness (used only when M07 hasn't run for a sample)
+        global_strand = "unstranded"
+        if hasattr(cfg, "sequencing") and hasattr(cfg.sequencing, "strandedness"):
+            global_strand = cfg.sequencing.strandedness or "unstranded"
+
+        # Per-sample strandedness from M07 strandedness.tsv (preferred)
         import csv as _csv
+        strand_m07: dict[str, str] = {}
+        strand_tsv = self.out / "mapping" / "strandedness.tsv"
+        if strand_tsv.exists():
+            with open(strand_tsv) as fh:
+                for row in _csv.DictReader(fh, delimiter="\t"):
+                    strand_m07[row["sample_id"]] = row["strandedness"].lower()
+            info(f"M06: loaded per-sample strandedness from {strand_tsv.name} "
+                 f"({len(strand_m07)} samples)")
+        else:
+            warn(f"M06: M07 strandedness.tsv not found — using global '{global_strand}' for all samples")
+
+        # Patch cfg so run_m06 can access what it needs
+        cfg_m06                    = type("C", (), {})()
+        cfg_m06.output_dir         = str(self.out)
+        cfg_m06.gtf                = str(Path(cfg.databases.gtf))
+        cfg_m06.dcc_path           = dcc_bin
+        cfg_m06.threads            = cfg.threads
+        cfg_m06.min_junction_reads = 2
+        cfg_m06.treatment          = treatment or "tumor"
+        cfg_m06.control            = control  or "normal"
+        cfg_m06.strandedness       = global_strand  # fallback only
+
         coldata_f = Path(cfg.samples.coldata)
         with open(coldata_f) as fh:
-            cfg_m06.samples = list(_csv.DictReader(fh, delimiter="\t"))
+            samples = list(_csv.DictReader(fh, delimiter="\t"))
 
-        result = run_m06(cfg_m06, chimeric_sams)
+        # Inject per-sample strandedness from M07 (overrides global fallback in run_m06)
+        for s in samples:
+            if s["sample_id"] in strand_m07:
+                s["strandedness"] = strand_m07[s["sample_id"]]
+        cfg_m06.samples = samples
+
+        result = run_m06(cfg_m06, chimeric_junctions)
         return bool(result)
 
     # ── M02: Trimming ────────────────────────────────────────────────────────
@@ -884,7 +908,7 @@ class ModuleRunner:
                 f"--alignMatesGapMax 1000000 "
                 f"--readFilesCommand zcat "
                 f"--quantMode GeneCounts "
-                f"--chimOutType SeparateSAMold "
+                f"--chimOutType SeparateSAMold Junctions "
                 f"--chimSegmentMin 20 "
                 f"--chimScoreDropMax 20 "
                 f"--chimJunctionOverhangMin 15 "

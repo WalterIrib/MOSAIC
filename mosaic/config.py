@@ -263,7 +263,7 @@ class DatabasesConfig:
     uniref_db:     str = ""
     arriba_bin:    str = ""
     arriba_db:     str = ""
-    ciri2_path:    str = "CIRI2.pl"
+    dcc_path:      str = "DCC"
     auto_download: bool = True
 
     def get(self, key: str, default: str = "") -> str:
@@ -603,7 +603,7 @@ def load_config(path: str | Path) -> MosaicConfig:
         uniref_db=db_raw.get("uniref_db", ""),
         arriba_bin=db_raw.get("arriba_bin", ""),
         arriba_db=db_raw.get("arriba_db", ""),
-        ciri2_path=db_raw.get("ciri2_path", "CIRI2.pl"),
+        dcc_path=db_raw.get("dcc_path", "DCC"),
         auto_download=db_raw.get("auto_download", True),
     )
 

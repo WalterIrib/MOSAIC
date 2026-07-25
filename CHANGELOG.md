@@ -2,6 +2,78 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [Unreleased] — 2026-07-25 — M06 circRNA: CIRI2/BWA-MEM → DCC (STAR chimeric junctions)
+
+### Changed — M06 circRNA detection rewritten from CIRI2+BWA-MEM to DCC+STAR
+
+**Root cause of the original failure:**
+`mosaic/m06_circrna.py` passed STAR `Chimeric.out.sam` to CIRI2 v2.0.6. CIRI2 requires
+a BWA-MEM SAM with the specific read-group and alignment tags it produces; STAR SAM lacks
+these tags. CIRI2 exited silently with 0 circRNA on all 21 samples (not a biological
+absence). This was a format incompatibility, not a biological result.
+
+**Why DCC (not BWA-MEM + CIRI2):**
+DCC v0.5.0 operates directly on STAR `Chimeric.out.junction`, which STAR already produces
+as part of the canonical M04 mapping step. BWA-MEM re-alignment on the same samples would
+require ≥64 GB RAM for the human reference index and is impractical on workstations with
+moderate memory. DCC is also the community-standard tool for STAR-based circRNA detection.
+
+**STAR parameter change (M04 — additive, zero impact on other modules):**
+`--chimOutType SeparateSAMold` → `--chimOutType SeparateSAMold Junctions`. The `Junctions`
+keyword is additive: STAR writes both `Chimeric.out.sam` (unchanged, verified by MD5 on
+9 De Cecco samples) and `Chimeric.out.junction`. All modules consuming `Chimeric.out.sam`
+(M15 Arriba, M17 rMATS, M23 TE insertions) are unaffected.
+
+**DCC parameters:** `-D` detect, `-Nr 2 1` minimum junction read threshold, `-an GTF`
+annotation, per-sample strandedness flag (`-N`/`-s`/`-ss`) from M07 output. DCC exits
+RC=1 at the optional `CircSkipJunction` step due to a GENCODE v49 `exon_id` trailing-quote
+bug; `CircRNACount` and `CircCoordinates` are valid and complete before that step.
+
+**Bug 1 found during integration — `_STRAND_MAP` inverted in `m06_circrna.py`:**
+The original code mapped `"rf"` → `"-ss"` and `"fr"` → `"-s"`, the opposite of the
+codebase convention (RF = R1 sense-strand = featureCounts `-s 1`; FR = R2 sense-strand
+= featureCounts `-s 2`; DCC: RF → `-s`, FR → `-ss`). **This bug never entered the
+published data:** the batch-isolation script used `-ss` / `-s` / `-N` hardcoded per
+sample. Impact measured on the FR test sample EP2: 2237 (`-N`) vs 2236 (`-ss`) = 0.04%.
+
+**Bug 2 found during integration — per-sample strandedness not read from M07:**
+`_run_m06_circrna` in `pipeline.py` read `cfg.sequencing.strandedness` (global config
+value, typically `"auto"` → `-N`) instead of reading `mapping/strandedness.tsv` produced
+by M07 for each sample. Affected: 5/9 De Cecco samples detected as FR by M07. **Also
+never entered the published data** for the same reason as Bug 1 (batch script was correct).
+Fix: strandedness now read from `mapping/strandedness.tsv` per sample; fallback to global
+only if M07 output is absent.
+
+**Validation:**
+End-to-end test on EP2 (the sample that exposed the strandedness bugs): pipeline.py with
+the fixed code, reading M07 strandedness.tsv automatically, produces **2,236 circRNA**
+— identical to the value from the correctly-parameterised batch script and to the number
+cited in the manuscript. No manual override required.
+
+**Biological result (METACAR):**
+circRNA are depleted 3–5× in ChaRNA vs totRNA (Welch t-test P<0.001 on both ChaRNA and
+mito-ChaRNA pairs; Mann-Whitney U=0, r_rb=1.0, P=0.10 structural limit with n=3). CDR1as
+(#1 by junction reads in all conditions) and circHIPK3 (#2, coordinates fall within HIPK3
+exon in GENCODE v49 despite DCC label "not_annotated") are the top circRNA and serve as
+biological plausibility controls. Core circRNA shared across all 3 ChaRNA replicates: 14;
+across all 3 totRNA: 166. circRNA exclusive to totRNA: 156; exclusive to ChaRNA: 4.
+
+**Files changed:**
+- `mosaic/m06_circrna.py` — complete rewrite; CIRI2 removed, DCC implemented with
+  `run_dcc()`, `parse_dcc()`, `merge_circrna()`; exact coordinate matching (no ±10 bp
+  tolerance); corrected `_STRAND_MAP`; per-sample strandedness via `s.get("strandedness")`
+- `mosaic/pipeline.py` — `_run_m06_circrna` rewritten: reads `mapping/strandedness.tsv`,
+  looks for `.junction` files (not SAM), injects per-sample strandedness; `--chimOutType`
+  updated
+- `mosaic/config.py` — `ciri2_path` → `dcc_path`
+- `environment.yml` — CIRI2 removed; `dcc=0.5.0` added; BWA kept (M23, not M06)
+- `config_template.yaml` — M06 comment updated
+- `scripts/m14_report.qmd` — "circRNA from CIRI2" → "circRNA from DCC"; Methods updated
+- `scripts/b1_sync_dcc.sh` — sync script: copies junction files + DCC output for 21
+  samples (9 De Cecco + 12 METACAR) into canonical; excludes `.circRNA`/`.circRNAmapped`
+  intermediates; MD5-verifies Chimeric.out.sam invariance (De Cecco); creates
+  `mapping/bam/<SID>/` dirs for METACAR (absent in canonical)
+
 ## [Unreleased] — 2026-07-21 — M23 3′-breakpoint bug fix (P0)
 
 ### Fixed — CRITICAL: M23 TE insertion clustering used alignment start instead of alignment end for 3′ soft-clips
