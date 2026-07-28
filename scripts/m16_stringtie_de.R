@@ -337,11 +337,20 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
         res_shrunk <- lfcShrink(dds_full,
                                 contrast=c("condition", opt$treatment, opt$control),
                                 type="ashr", quiet=TRUE)
-        shrunk_df <- as.data.frame(res_shrunk) |>
-          tibble::rownames_to_column("t_name") |>
-          select(t_name, log2FoldChange_shrunk=log2FoldChange,
-                 lfcSE_shrunk=lfcSE, svalue)
-        cat("[INF] lfcShrink (ashr) applied — log2FoldChange_shrunk and svalue added\n")
+        shrunk_raw <- as.data.frame(res_shrunk) |>
+          tibble::rownames_to_column("t_name")
+        # svalue is stored in metadata by some DESeq2 versions; extract defensively
+        sval_vec <- tryCatch(res_shrunk$svalue, error=function(e) NULL)
+        if (!is.null(sval_vec)) {
+          shrunk_raw$svalue <- sval_vec
+        }
+        shrunk_cols <- c("t_name", "log2FoldChange", "lfcSE")
+        if ("svalue" %in% colnames(shrunk_raw)) shrunk_cols <- c(shrunk_cols, "svalue")
+        shrunk_df <- shrunk_raw |>
+          select(all_of(shrunk_cols)) |>
+          rename(log2FoldChange_shrunk=log2FoldChange, lfcSE_shrunk=lfcSE)
+        cat(sprintf("[INF] lfcShrink (ashr) applied — columns: %s\n",
+                    paste(colnames(shrunk_df)[-1], collapse=", ")))
       } else {
         cat("[WARN] ashr not available — reporting unshrunken LFC only\n")
       }
@@ -349,9 +358,11 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
       res_df <- as.data.frame(res[keep_ids, ]) |>
         tibble::rownames_to_column("t_name") |>
         { df <- .
-          if (!is.null(shrunk_df))
-            left_join(df, shrunk_df |> filter(t_name %in% keep_ids), by="t_name")
-          else df
+          if (!is.null(shrunk_df)) {
+            left_join(df,
+                      shrunk_df |> filter(t_name %in% keep_ids),
+                      by="t_name")
+          } else df
         }() |>
         left_join(novel_fpkm |>
                     select(t_name, any_of(c("class_code","class_desc",
