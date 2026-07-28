@@ -32,6 +32,8 @@ option_list <- list(
   make_option("--lfc",            type="double",    default=1.0),
   make_option("--min-cov",        type="double",    default=1.0,
               help="Min mean coverage to keep transcript"),
+  make_option("--min-tpm",       type="double",    default=1.0,
+              help="Min mean TPM across all samples (from t_data.ctab; applied before DESeq2)"),
   make_option("--min-samples",   type="integer",   default=2L,
               help="Min samples per group with count>0 (featureCounts; applied before DESeq2)")
 )
@@ -213,16 +215,37 @@ cat(sprintf("[INF] Total transcripts: %d | Samples: %d\n",
             nrow(fpkm_wide), length(quant_dirs)))
 
 # ── 3. Filter to novel transcripts ────────────────────────────────────────────
-novel_ids <- if (!is.null(novel_tmap)) unique(novel_tmap$qry_id) else
-             character(0)
+# novel_tmap may be NULL or 0-row (empty after structural filters).
+# Guard against type errors in joins when data frame is empty.
+novel_ids <- if (!is.null(novel_tmap) && nrow(novel_tmap) > 0) {
+  unique(as.character(novel_tmap$qry_id))
+} else {
+  character(0)
+}
 
-cat(sprintf("[INF] Novel transcript IDs from tmap: %d\n", length(novel_ids)))
+cat(sprintf("[INF] Novel transcript IDs from tmap (structural filter): %d\n",
+            length(novel_ids)))
 
 # Filter matrix to novel
 novel_fpkm <- fpkm_wide |> filter(t_name %in% novel_ids)
 novel_cov   <- cov_wide  |> filter(t_name %in% novel_ids)
 
 cat(sprintf("[INF] Novel transcripts in matrix: %d\n", nrow(novel_fpkm)))
+
+# min_tpm filter: mean TPM across all samples from t_data.ctab (pass-4 re-quant).
+# stringtie --merge does not write TPM to merged.gtf, so TMAP TPM is always 0;
+# per-sample TPM from -e re-quantification is the correct source.
+min_tpm <- opt[["min-tpm"]]
+if (nrow(novel_fpkm) > 0 && min_tpm > 0) {
+  tpm_mat  <- as.matrix(novel_fpkm[, -1, drop=FALSE])
+  mean_tpm <- rowMeans(tpm_mat, na.rm=TRUE)
+  keep     <- mean_tpm >= min_tpm
+  cat(sprintf("[INF] min_tpm >= %.2f: %d / %d transcripts pass\n",
+              min_tpm, sum(keep), nrow(novel_fpkm)))
+  novel_fpkm <- novel_fpkm[keep, ]
+  novel_ids  <- novel_fpkm$t_name
+  novel_cov  <- novel_cov |> filter(t_name %in% novel_ids)
+}
 
 # Filter by minimum coverage
 if (nrow(novel_cov) > 0) {
@@ -234,16 +257,13 @@ if (nrow(novel_cov) > 0) {
               opt[["min-cov"]], nrow(novel_fpkm)))
 }
 
-# Add class code annotation
-if (!is.null(novel_tmap)) {
-  novel_fpkm <- novel_fpkm |>
-    left_join(if (!is.null(novel_tmap))
-                novel_tmap |>
-                  select(t_name=qry_id, class_code, ref_gene_id,
-                         num_exons, len) |>
-                  mutate(class_desc=class_desc[class_code])
-              else data.frame(t_name=character(0)),
-              by="t_name")
+# Add class code annotation — guard against empty novel_tmap
+if (!is.null(novel_tmap) && nrow(novel_tmap) > 0) {
+  anno <- novel_tmap |>
+    select(t_name=qry_id, class_code, ref_gene_id, num_exons, len) |>
+    mutate(t_name=as.character(t_name),
+           class_desc=class_desc[class_code])
+  novel_fpkm <- novel_fpkm |> left_join(anno, by="t_name")
 }
 
 write_tsv(novel_fpkm, file.path(opt$outdir, "novel_transcript_fpkm.tsv"))
@@ -263,7 +283,12 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
 } else {
   library(DESeq2)
 
-  sample_cols <- coldata$sample_id[coldata$sample_id %in% colnames(fc_counts)]
+  # Subset to only treatment and control samples; coldata may contain
+  # additional conditions that would produce NA in the DESeq2 design.
+  sample_cols <- coldata$sample_id[
+    coldata$sample_id %in% colnames(fc_counts) &
+    coldata$condition %in% c(opt$treatment, opt$control)
+  ]
   keep_ids    <- novel_ids[novel_ids %in% rownames(fc_counts)]
 
   if (length(keep_ids) < 3) {

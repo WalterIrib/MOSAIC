@@ -1629,15 +1629,18 @@ class ModuleRunner:
                         warn(f"StringTie re-quantification failed for {sid}")
 
         # ── Filter tmap to novel transcripts with configurable criteria ───────
-        # All filter data come from gffcompare TMAP columns:
-        #   col 3: class_code, col 6: num_exons, col 8: TPM, col 10: len
-        # The min_samples filter (per group, count>0 in featureCounts) is
-        # applied downstream in the R script.
+        # Structural filters (class_code, min_exons, min_length) are applied
+        # here from TMAP columns. Expression-based filters (min_tpm,
+        # min_samples) are applied downstream in the R script using
+        # t_data.ctab per-sample TPM from pass 4 re-quantification.
+        # NOTE: stringtie --merge does not write FPKM/TPM/cov attributes to
+        # the merged GTF, so TMAP expression columns are always 0 for novel
+        # transcripts — do not use them for filtering here.
         novel_tmap = out_dir / "novel_transcripts.tmap"
         nc = cfg.m16_novel
         novel_codes = set(nc.class_codes)
         if tmap.exists() and not novel_tmap.exists():
-            total = after_code = after_exons = after_length = after_tpm = 0
+            total = after_code = after_exons = after_length = 0
             novel_lines: list = []
             with open(tmap) as fh:
                 fh.readline()  # skip header — R reads without header
@@ -1663,21 +1666,14 @@ class ModuleRunner:
                     if length < nc.min_length:
                         continue
                     after_length += 1
-                    try:
-                        tpm_val = float(parts[7])
-                    except ValueError:
-                        continue
-                    if tpm_val < nc.min_tpm:
-                        continue
-                    after_tpm += 1
                     novel_lines.append(line)
             novel_tmap.write_text("".join(novel_lines))
             info(f"M16 novel filter cascade (class_codes={nc.class_codes}):")
             info(f"  total in tmap:              {total}")
             info(f"  after class_code filter:    {after_code}")
             info(f"  after min_exons>={nc.min_exons}:          {after_exons}")
-            info(f"  after min_length>={nc.min_length}:        {after_length}")
-            info(f"  after min_tpm>={nc.min_tpm}:           {after_tpm}  → novel_transcripts.tmap")
+            info(f"  after min_length>={nc.min_length}:        {after_length}  → novel_transcripts.tmap")
+            info(f"  min_tpm>={nc.min_tpm} and min_samples>={nc.min_samples}: applied in R using t_data.ctab")
 
         # ── featureCounts: raw integer counts from all BAMs vs merged GTF ────
         # Runs once (idempotent); output is reused across comparisons.
@@ -1726,6 +1722,7 @@ class ModuleRunner:
             "--control",     control,
             "--padj",        str(cfg.thresholds.padj),
             "--lfc",         str(cfg.thresholds.lfc),
+            "--min-tpm",     str(cfg.m16_novel.min_tpm),
             "--min-samples", str(cfg.m16_novel.min_samples),
         ]
         if tmap.exists():
