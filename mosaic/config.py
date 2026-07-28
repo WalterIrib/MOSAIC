@@ -287,6 +287,16 @@ class ThresholdsConfig:
 
 
 @dc.dataclass
+class M16NovelConfig:
+    """Filtering criteria for M16 novel transcript discovery (two-pass StringTie)."""
+    class_codes: list  = dc.field(default_factory=lambda: ["u", "i", "x"])
+    min_exons:   int   = 2
+    min_length:  int   = 200
+    min_tpm:     float = 1.0
+    min_samples: int   = 2
+
+
+@dc.dataclass
 class EnvironmentsConfig:
     """Conda environment names for each tool group."""
     main:   str          = "mosaic"
@@ -378,6 +388,7 @@ class MosaicConfig:
     # v2 fields
     databases:    DatabasesConfig    = dc.field(default_factory=DatabasesConfig)
     thresholds:   ThresholdsConfig   = dc.field(default_factory=ThresholdsConfig)
+    m16_novel:    M16NovelConfig     = dc.field(default_factory=M16NovelConfig)
     environments: EnvironmentsConfig = dc.field(default_factory=EnvironmentsConfig)
     samples:      SamplesConfig      = dc.field(default_factory=SamplesConfig)
     modules_v2:   ModulesV2Config    = dc.field(default_factory=ModulesV2Config)
@@ -687,6 +698,15 @@ def load_config(path: str | Path) -> MosaicConfig:
     if seq_raw.get("read_length"):
         library.read_length = int(seq_raw["read_length"])
 
+    m16_raw = raw.get("m16_novel", {})
+    m16_novel = M16NovelConfig(
+        class_codes=list(m16_raw.get("class_codes", ["u", "i", "x"])),
+        min_exons=int(m16_raw.get("min_exons", 2)),
+        min_length=int(m16_raw.get("min_length", 200)),
+        min_tpm=float(m16_raw.get("min_tpm", 1.0)),
+        min_samples=int(m16_raw.get("min_samples", 2)),
+    )
+
     cfg = MosaicConfig(
         project=project,
         library=library,
@@ -700,6 +720,7 @@ def load_config(path: str | Path) -> MosaicConfig:
         te=te,
         databases=databases,
         thresholds=thresholds,
+        m16_novel=m16_novel,
         environments=environments,
         samples=samples,
         modules_v2=modules_v2,
@@ -775,6 +796,13 @@ environments:
   main:   mosaic
   humann: humann3
   arriba: null                  # null = use arriba_bin directly
+
+m16_novel:
+  class_codes:  [u, i, x]   # j available but off by default
+  min_exons:    2            # excludes mono-exonic fragments (known limitation: misses histone genes)
+  min_length:   200
+  min_tpm:      1.0
+  min_samples:  2            # per group: count > 0 in >= N samples of at least one condition
 
 thresholds:
   padj:               0.05

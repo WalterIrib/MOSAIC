@@ -31,7 +31,9 @@ option_list <- list(
   make_option("--padj",           type="double",    default=0.05),
   make_option("--lfc",            type="double",    default=1.0),
   make_option("--min-cov",        type="double",    default=1.0,
-              help="Min mean coverage to keep transcript")
+              help="Min mean coverage to keep transcript"),
+  make_option("--min-samples",   type="integer",   default=2L,
+              help="Min samples per group with count>0 (featureCounts; applied before DESeq2)")
 )
 
 opt <- parse_args(OptionParser(option_list=option_list))
@@ -278,6 +280,20 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
     keep_rows <- rowSums(count_mat) > 0
     count_mat <- count_mat[keep_rows, ]
     cat(sprintf("[INF] Non-zero novel transcripts for DE: %d\n", nrow(count_mat)))
+
+    # Per-group min_samples filter: keep transcripts with count>0 in >=N
+    # samples of at least one condition.
+    min_s <- opt[["min-samples"]]
+    treat_ids   <- coldata$sample_id[coldata$condition == opt$treatment]
+    control_ids <- coldata$sample_id[coldata$condition == opt$control]
+    treat_ids   <- treat_ids[treat_ids %in% colnames(count_mat)]
+    control_ids <- control_ids[control_ids %in% colnames(count_mat)]
+    n_treat   <- rowSums(count_mat[, treat_ids,   drop=FALSE] > 0)
+    n_control <- rowSums(count_mat[, control_ids, drop=FALSE] > 0)
+    keep_samples <- (n_treat >= min_s) | (n_control >= min_s)
+    count_mat <- count_mat[keep_samples, ]
+    cat(sprintf("[INF] After min_samples>=%d per group: %d transcripts\n",
+                min_s, nrow(count_mat)))
 
     if (nrow(count_mat) >= 3 && ncol(count_mat) >= 4) {
       cd <- coldata[match(colnames(count_mat), coldata$sample_id), ]

@@ -1559,56 +1559,125 @@ class ModuleRunner:
         de_dir  = self._comparison_dir(comparison) / "m16_stringtie"  # per-comparison DE
         de_dir.mkdir(parents=True, exist_ok=True)
 
-        # StringTie per-sample assembly
         gtf = Path(cfg.databases.gtf)
+
+        # ── Pass 1: reference-guided assembly (no -e) ─────────────────────────
+        # StringTie discovers novel transcripts when -e is absent. With -G it
+        # uses the reference as a guide but is free to assemble new models.
+        asm_dir = out_dir / "assembly"
+        asm_dir.mkdir(exist_ok=True)
         for sid in cfg.samples.sample_ids:
             bam = bam_dir / sid / f"{sid}_Aligned.sortedByCoord.out.bam"
             if not bam.exists():
                 continue
-            sid_out = out_dir / f"{sid}_quant"
-            sid_out.mkdir(exist_ok=True)
-            ret = run_cmd([
-                "stringtie", str(bam),
-                "-G", str(gtf),
-                "-o", str(sid_out / f"{sid}.gtf"),
-                "-e", "-b", str(sid_out),
-                "-p", str(cfg.threads),
-            ], log_file=self._log("m16_stringtie_asm", sid))
-            if ret != 0:
-                warn(f"StringTie assembly failed for {sid}")
+            sid_asm = asm_dir / f"{sid}_asm"
+            sid_asm.mkdir(exist_ok=True)
+            asm_gtf = sid_asm / f"{sid}.gtf"
+            if not asm_gtf.exists():
+                ret = run_cmd([
+                    "stringtie", str(bam),
+                    "-G", str(gtf),
+                    "-o", str(asm_gtf),
+                    "-p", str(cfg.threads),
+                ], log_file=self._log("m16_stringtie_asm", sid))
+                if ret != 0:
+                    warn(f"StringTie assembly failed for {sid}")
 
-        # StringTie merge with gffcmp
+        # ── Pass 2: merge assembled GTFs ──────────────────────────────────────
         merged_gtf = out_dir / "merged.gtf"
         gtf_list   = out_dir / "gtf_list.txt"
-        sample_gtfs = list(out_dir.glob("*/*.gtf"))
+        sample_gtfs = list(asm_dir.glob("*/*.gtf"))
 
-        if sample_gtfs:
+        if sample_gtfs and not merged_gtf.exists():
             gtf_list.write_text("\n".join(str(g) for g in sample_gtfs))
             run_cmd(["stringtie", "--merge",
                      "-G", str(gtf),
                      "-o", str(merged_gtf),
                      str(gtf_list)],
                     log_file=self._log("m16_stringtie_merge"))
+
+        # ── Pass 3: gffcompare — classify novel vs annotated ──────────────────
+        tmap = out_dir / "gffcmp.merged.gtf.tmap"
+        if merged_gtf.exists() and not tmap.exists():
             run_cmd(["gffcompare",
                      "-r", str(gtf),
                      "-o", str(out_dir / "gffcmp"),
                      str(merged_gtf)],
                     log_file=self._log("m16_gffcmp"))
 
-        # ── novel_transcripts.tmap: filter tmap to novel class codes ──────────
-        tmap       = out_dir / "gffcmp.merged.gtf.tmap"
+        # ── Pass 4: re-quantification with -e -b against merged GTF ──────────
+        # Running StringTie with -e on the merged GTF gives each sample
+        # TPM/FPKM values for the same set of transcript models (known +
+        # novel), making expression comparable across samples.
+        if merged_gtf.exists():
+            for sid in cfg.samples.sample_ids:
+                bam = bam_dir / sid / f"{sid}_Aligned.sortedByCoord.out.bam"
+                if not bam.exists():
+                    continue
+                sid_quant = out_dir / f"{sid}_quant"
+                sid_quant.mkdir(exist_ok=True)
+                quant_gtf = sid_quant / f"{sid}.gtf"
+                if not quant_gtf.exists():
+                    ret = run_cmd([
+                        "stringtie", str(bam),
+                        "-G", str(merged_gtf),   # merged includes novel transcripts
+                        "-o", str(quant_gtf),
+                        "-e", "-b", str(sid_quant),
+                        "-p", str(cfg.threads),
+                    ], log_file=self._log("m16_stringtie_quant", sid))
+                    if ret != 0:
+                        warn(f"StringTie re-quantification failed for {sid}")
+
+        # ── Filter tmap to novel transcripts with configurable criteria ───────
+        # All filter data come from gffcompare TMAP columns:
+        #   col 3: class_code, col 6: num_exons, col 8: TPM, col 10: len
+        # The min_samples filter (per group, count>0 in featureCounts) is
+        # applied downstream in the R script.
         novel_tmap = out_dir / "novel_transcripts.tmap"
-        novel_codes = {"u", "i", "j", "x", "s", "e", "p"}
+        nc = cfg.m16_novel
+        novel_codes = set(nc.class_codes)
         if tmap.exists() and not novel_tmap.exists():
-            novel_lines = []
+            total = after_code = after_exons = after_length = after_tpm = 0
+            novel_lines: list = []
             with open(tmap) as fh:
                 fh.readline()  # skip header — R reads without header
                 for line in fh:
                     parts = line.split("\t")
-                    if len(parts) >= 3 and parts[2] in novel_codes:
-                        novel_lines.append(line)
+                    if len(parts) < 10:
+                        continue
+                    total += 1
+                    if parts[2] not in novel_codes:
+                        continue
+                    after_code += 1
+                    try:
+                        n_ex = int(parts[5])
+                    except ValueError:
+                        continue
+                    if n_ex < nc.min_exons:
+                        continue
+                    after_exons += 1
+                    try:
+                        length = int(parts[9])
+                    except ValueError:
+                        continue
+                    if length < nc.min_length:
+                        continue
+                    after_length += 1
+                    try:
+                        tpm_val = float(parts[7])
+                    except ValueError:
+                        continue
+                    if tpm_val < nc.min_tpm:
+                        continue
+                    after_tpm += 1
+                    novel_lines.append(line)
             novel_tmap.write_text("".join(novel_lines))
-            info(f"M16: {len(novel_lines)} novel transcripts → novel_transcripts.tmap")
+            info(f"M16 novel filter cascade (class_codes={nc.class_codes}):")
+            info(f"  total in tmap:              {total}")
+            info(f"  after class_code filter:    {after_code}")
+            info(f"  after min_exons>={nc.min_exons}:          {after_exons}")
+            info(f"  after min_length>={nc.min_length}:        {after_length}")
+            info(f"  after min_tpm>={nc.min_tpm}:           {after_tpm}  → novel_transcripts.tmap")
 
         # ── featureCounts: raw integer counts from all BAMs vs merged GTF ────
         # Runs once (idempotent); output is reused across comparisons.
@@ -1650,13 +1719,14 @@ class ModuleRunner:
 
         # DE analysis — results go to per-comparison dir; assembly files from global dir
         args = [
-            "--st-dir",    str(out_dir),
-            "--coldata",   str(self._write_coldata(comparison)),
-            "--outdir",    str(de_dir),
-            "--treatment", treatment,
-            "--control",   control,
-            "--padj",      str(cfg.thresholds.padj),
-            "--lfc",       str(cfg.thresholds.lfc),
+            "--st-dir",      str(out_dir),
+            "--coldata",     str(self._write_coldata(comparison)),
+            "--outdir",      str(de_dir),
+            "--treatment",   treatment,
+            "--control",     control,
+            "--padj",        str(cfg.thresholds.padj),
+            "--lfc",         str(cfg.thresholds.lfc),
+            "--min-samples", str(cfg.m16_novel.min_samples),
         ]
         if tmap.exists():
             args += ["--tmap", str(tmap)]
