@@ -2,6 +2,66 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [Unreleased] — 2026-07-28 — M16 novel-transcript DE: FPKM proxy → featureCounts raw counts
+
+Both bugs were identified by an independent code review and confirmed on the canonical
+METACAR and De Cecco 2019 runs. Neither affected the published data (M16 produced no novel
+transcripts on those datasets), but both would produce incorrect or missing results on any
+dataset where StringTie assembles genuinely novel transcripts.
+
+### Bug 1 — M16 passed FPKM×10 as pseudo-counts to DESeq2 (statistical error)
+
+**File:** `scripts/m16_stringtie_de.R`, former line 216:
+```r
+count_mat <- round(as.matrix(novel_fpkm[, sample_cols]) * 10)
+```
+The comment in the code acknowledged the problem: *"Use rounded FPKM as proxy counts"*.
+FPKM are already normalised for transcript length and sequencing depth. Multiplying by an
+arbitrary scalar and rounding does not reconstruct raw counts. DESeq2's negative-binomial
+model requires raw counts for valid dispersion estimation; applying it to FPKM-derived
+values produces incorrect p-values and fold changes without any error or warning.
+
+**Fix:** Added a `featureCounts` step in `mosaic/pipeline.py` (`_run_m16_stringtie`) that
+runs after gffcompare. `featureCounts` counts reads from all canonical BAMs against the
+StringTie merged GTF at transcript level (`-g transcript_id -f`), producing a raw integer
+count matrix (`featurecounts_transcripts.txt`). This file is passed to the R script via
+`--feature-counts`. The DESeq2 section in `m16_stringtie_de.R` now reads from that matrix
+instead of the FPKM values. The FPKM file (`novel_transcript_fpkm.tsv`) is kept for
+display in HTML reports.
+
+Added `validate_count_matrix()` in `m16_stringtie_de.R`: rejects matrices with
+non-integer or negative values before they reach DESeq2, with an explicit error message
+citing FPKM/TPM as the likely source. If `featureCounts` output is absent (e.g. tools
+unavailable), the script prints a clear warning and skips DE rather than silently
+proceeding with invalid data.
+
+### Bug 2 — `novel_transcripts.tmap` never generated (path bug)
+
+**File:** `mosaic/pipeline.py`, `_run_m16_stringtie`:
+The code checked `if novel_tmap.exists()` before passing `--novel-tmap` to the R script.
+The file `novel_transcripts.tmap` was never created by any pipeline step. The R script
+therefore always received `novel_ids = character(0)`, regardless of whether gffcompare
+found genuinely novel transcripts (class codes `u`, `i`, `j`, `x`, `s`, `e`, `p`).
+
+**Fix:** After gffcompare, `pipeline.py` now filters `gffcmp.merged.gtf.tmap` to rows
+with novel class codes and writes them (without the header line, as expected by the R
+reader) to `novel_transcripts.tmap`. The step is idempotent: skipped if the file already
+exists.
+
+### Tests added
+
+`tests/test_m16_validation.py` (7 tests, no external tools required for 3 of them):
+- novel_tmap filter logic: keeps novel codes, excludes annotated, covers all 7 novel codes
+- `validate_count_matrix`: accepts integer counts and zeros; rejects FPKM floats; rejects
+  negative values
+
+### Smoke test
+
+12/12 tests pass unchanged. The featureCounts step is skipped when BAMs are absent
+(synthetic test data), and the R script handles missing `--feature-counts` gracefully.
+
+---
+
 ## [Unreleased] — 2026-07-25 — M06 circRNA: CIRI2/BWA-MEM → DCC (STAR chimeric junctions)
 
 ### Changed — M06 circRNA detection rewritten from CIRI2+BWA-MEM to DCC+STAR

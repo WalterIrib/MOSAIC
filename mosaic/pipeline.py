@@ -1595,9 +1595,50 @@ class ModuleRunner:
                      str(merged_gtf)],
                     log_file=self._log("m16_gffcmp"))
 
-        # DE analysis — results go to per-comparison dir; assembly files from global dir
+        # ── novel_transcripts.tmap: filter tmap to novel class codes ──────────
         tmap       = out_dir / "gffcmp.merged.gtf.tmap"
         novel_tmap = out_dir / "novel_transcripts.tmap"
+        novel_codes = {"u", "i", "j", "x", "s", "e", "p"}
+        if tmap.exists() and not novel_tmap.exists():
+            novel_lines = []
+            with open(tmap) as fh:
+                fh.readline()  # skip header — R reads without header
+                for line in fh:
+                    parts = line.split("\t")
+                    if len(parts) >= 3 and parts[2] in novel_codes:
+                        novel_lines.append(line)
+            novel_tmap.write_text("".join(novel_lines))
+            info(f"M16: {len(novel_lines)} novel transcripts → novel_transcripts.tmap")
+
+        # ── featureCounts: raw integer counts from all BAMs vs merged GTF ────
+        # Runs once (idempotent); output is reused across comparisons.
+        fc_output = out_dir / "featurecounts_transcripts.txt"
+        merged_gtf = out_dir / "merged.gtf"
+        if merged_gtf.exists() and not fc_output.exists():
+            all_bams = [
+                bam_dir / sid / f"{sid}_Aligned.sortedByCoord.out.bam"
+                for sid in cfg.samples.sample_ids
+            ]
+            all_bams = [b for b in all_bams if b.exists()]
+            if all_bams:
+                fc_cmd = [
+                    "featureCounts",
+                    "-T", str(min(cfg.threads, 4)),
+                    "-g", "transcript_id",
+                    "-f",          # exon-level features, grouped by transcript_id
+                    "-a", str(merged_gtf),
+                    "-o", str(fc_output),
+                ]
+                if cfg.library.layout == "PE":
+                    fc_cmd.append("-p")
+                fc_cmd += [str(b) for b in all_bams]
+                run_cmd(fc_cmd, log_file=self._log("m16_featurecounts"))
+                if fc_output.exists():
+                    info(f"M16: featureCounts complete → {fc_output.name}")
+                else:
+                    warn("M16: featureCounts did not produce output — novel DE will be skipped")
+
+        # DE analysis — results go to per-comparison dir; assembly files from global dir
         args = [
             "--st-dir",    str(out_dir),
             "--coldata",   str(self._write_coldata(comparison)),
@@ -1611,6 +1652,8 @@ class ModuleRunner:
             args += ["--tmap", str(tmap)]
         if novel_tmap.exists():
             args += ["--novel-tmap", str(novel_tmap)]
+        if fc_output.exists():
+            args += ["--feature-counts", str(fc_output)]
         return run_r_script(self.scripts / "m16_stringtie_de.R", args,
                             log_file=self._log("m16_stringtie_r", comparison)) == 0
 
