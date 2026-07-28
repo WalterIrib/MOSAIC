@@ -321,11 +321,38 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
     cat(sprintf("[INF] Novel transcripts in full matrix: %d\n", length(keep_ids)))
 
     if (length(keep_ids) >= 3) {
-      res    <- results(dds_full,
-                        contrast=c("condition", opt$treatment, opt$control),
-                        alpha=opt$padj)
+      # Unshrunken results: padj and pvalue used for significance.
+      # padj is NOT changed by lfcShrink — it comes from the Wald test here.
+      res <- results(dds_full,
+                     contrast=c("condition", opt$treatment, opt$control),
+                     alpha=opt$padj)
+
+      # LFC shrinkage (ashr) — same approach as M08.
+      # Regularises log2FC estimates for low-count transcripts.
+      # Adds log2FoldChange_shrunk, lfcSE_shrunk, svalue columns.
+      # Note: extreme padj values (e.g. near-zero within-group variance at n=3)
+      # reflect genuine signal but are precision artefacts; padj is unchanged.
+      shrunk_df <- NULL
+      if (requireNamespace("ashr", quietly=TRUE)) {
+        res_shrunk <- lfcShrink(dds_full,
+                                contrast=c("condition", opt$treatment, opt$control),
+                                type="ashr", quiet=TRUE)
+        shrunk_df <- as.data.frame(res_shrunk) |>
+          tibble::rownames_to_column("t_name") |>
+          select(t_name, log2FoldChange_shrunk=log2FoldChange,
+                 lfcSE_shrunk=lfcSE, svalue)
+        cat("[INF] lfcShrink (ashr) applied — log2FoldChange_shrunk and svalue added\n")
+      } else {
+        cat("[WARN] ashr not available — reporting unshrunken LFC only\n")
+      }
+
       res_df <- as.data.frame(res[keep_ids, ]) |>
         tibble::rownames_to_column("t_name") |>
+        { df <- .
+          if (!is.null(shrunk_df))
+            left_join(df, shrunk_df |> filter(t_name %in% keep_ids), by="t_name")
+          else df
+        }() |>
         left_join(novel_fpkm |>
                     select(t_name, any_of(c("class_code","class_desc",
                                             "ref_gene_id","num_exons","len"))),
@@ -342,18 +369,21 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
       cat(sprintf("[INF] Significant novel DE transcripts: %d / %d\n",
                   n_sig, nrow(res_df)))
 
+      # Volcano: use shrunken LFC on x-axis if available (less extreme for noisy transcripts)
+      lfc_col <- if ("log2FoldChange_shrunk" %in% names(res_df)) "log2FoldChange_shrunk" else "log2FoldChange"
+
       p_vol <- res_df |>
-        filter(!is.na(padj), !is.na(log2FoldChange)) |>
+        filter(!is.na(padj), !is.na(.data[[lfc_col]])) |>
         mutate(
-          sig = padj < opt$padj & abs(log2FoldChange) > opt$lfc,
+          sig = padj < opt$padj & abs(.data[[lfc_col]]) > opt$lfc,
           lab = ifelse(sig, t_name, NA),
           col = case_when(
-            sig & log2FoldChange > 0 ~ "UP",
-            sig & log2FoldChange < 0 ~ "DOWN",
+            sig & .data[[lfc_col]] > 0 ~ "UP",
+            sig & .data[[lfc_col]] < 0 ~ "DOWN",
             TRUE ~ "NS"
           )
         ) |>
-        ggplot(aes(x=log2FoldChange, y=-log10(padj), color=col)) +
+        ggplot(aes(x=.data[[lfc_col]], y=-log10(padj), color=col)) +
         geom_point(alpha=0.7, size=1.8) +
         ggrepel::geom_text_repel(aes(label=lab), size=2.5,
                                   max.overlaps=15, show.legend=FALSE) +
@@ -367,7 +397,7 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
              subtitle=sprintf("%s vs %s | padj<%.2f | |LFC|>%.1f | %d sig",
                               opt$treatment, opt$control,
                               opt$padj, opt$lfc, n_sig),
-             x=sprintf("log2FC (%s / %s)", opt$treatment, opt$control),
+             x=sprintf("log2FC shrunken (%s / %s)", opt$treatment, opt$control),
              y="-log10(padj)") +
         theme_minimal(base_size=12)
 

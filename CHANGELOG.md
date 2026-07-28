@@ -2,6 +2,37 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [Unreleased] — 2026-07-28 — M16: two-pass StringTie, full-matrix DESeq2, lfcShrink, per-sample strandedness
+
+### M16 — two-pass StringTie workflow for novel transcript discovery
+
+Replaced single-pass (`-e`, quantification-only) with a four-pass workflow:
+Pass 1 (assembly without `-e`), Pass 2 (stringtie --merge), Pass 3 (gffcompare), Pass 4 (`-e -b` re-quantification on merged GTF). The original code ran only a quantification pass — with `-e`, novel transcripts cannot be assembled by construction.
+
+**Known limitation — existence-based idempotency:**
+Each pass checks `if not output_file.exists()` before running (e.g. `if not asm_gtf.exists()`). This is purely an existence check: if a file exists it is reused regardless of the parameters that produced it. Changing assembly parameters (e.g. strandedness flag, reference GTF version, thread count) will be silently ignored on subsequent runs because the output file already exists. Use `--force` to invalidate cached results when parameters change. A parameter-aware fingerprinting system (storing a hash of the command alongside each output) is the principled fix — planned for v2.0.
+
+### M16 — per-sample strandedness in StringTie assembly and re-quantification
+
+StringTie passes 1 and 4 now load per-sample strandedness from `mapping/strandedness.tsv` (produced by M07) and pass `--fr`, `--rf`, or no flag per sample. Previously all samples ran without a strandedness flag (inference from GT-AG splice sites only). For datasets with mixed strandedness (e.g. De Cecco 2019: 5 FR + 4 unstranded samples), using `--fr` for FR samples improves assembly accuracy. Because the idempotency check is existence-based, applying this fix to a dataset with pre-existing assemblies requires manual deletion of the `assembly/` and `*_quant/` directories followed by `--force`.
+
+### M16 — DESeq2 on full featureCounts matrix
+
+DESeq2 dispersion estimation now uses the full featureCounts matrix (~507K merged transcripts, filtered to non-zero rows per comparison) instead of the pre-filtered ~43-row novel-transcript subset. Running on a small pre-filtered matrix collapses the empirical Bayes mean-dispersion curve fit → underestimated dispersions → inflated test statistics. Results are extracted from the full-matrix fit only for the novel transcript IDs of interest.
+
+**Note on extreme padj values at n=3:**
+With n=3 replicates per group, a transcript with near-zero within-group variance (e.g. three samples with identical counts) produces a near-zero ML dispersion estimate. Even after empirical Bayes shrinkage toward the genome-wide mean-dispersion curve, the shrunken dispersion can be very low for such transcripts → extreme Wald statistics (e.g. padj < 1e-50). This is a data property, not a model failure; the signal is genuine. Use the svalue (local false sign rate from ashr) as an alternative to padj when reporting results from n=3 studies.
+
+### M16 — lfcShrink (ashr) for consistency with M08
+
+`lfcShrink(type="ashr")` is now applied after `DESeq()`, mirroring M08's approach. Two additional columns are written to `novel_transcript_DE.tsv`: `log2FoldChange_shrunk` (posterior mean LFC from ashr, regularised for low-count transcripts) and `lfcSE_shrunk` (posterior SD). The `svalue` column (local false sign rate) is also included. The volcano plot uses shrunken LFC on the x-axis. Significance thresholds (padj < 0.05, |LFC| > 1) continue to use unshrunken values from `results()` — padj is not modified by lfcShrink.
+
+### M16 — per-comparison DE dispatch (COMP_INDEPENDENT removed)
+
+`m16_stringtie` removed from `COMP_INDEPENDENT`. Assembly and quantification steps (passes 1-4, featureCounts) are idempotent and run once on the first comparison; the R DE script runs per comparison with the correct treatment/control pair. Previously, running the full pipeline produced DE results only for the first comparison (the module was called once with `comparison=None`).
+
+---
+
 ## [Unreleased] — 2026-07-28 — M16 novel-transcript DE: FPKM proxy → featureCounts raw counts
 
 Both bugs were identified by an independent code review and confirmed on the canonical
