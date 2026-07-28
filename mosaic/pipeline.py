@@ -1612,8 +1612,18 @@ class ModuleRunner:
 
         # ── featureCounts: raw integer counts from all BAMs vs merged GTF ────
         # Runs once (idempotent); output is reused across comparisons.
+        # NOTE: featureCounts counts at meta-feature level (one row per
+        # transcript_id). Do NOT use -f: that switches to feature (exon) level,
+        # producing one row per exon instead of one per transcript.
+        # Reads mapping to exons shared between overlapping transcripts are
+        # multi-mapped and discarded (featureCounts default); novel transcripts
+        # that overlap each other are therefore under-counted. For screening-level
+        # use this is acceptable; isoform-level rigor would require EM-based
+        # quantification (Salmon/RSEM) — out of scope for M16.
         fc_output = out_dir / "featurecounts_transcripts.txt"
         merged_gtf = out_dir / "merged.gtf"
+        strand    = self._get_consensus_strandedness()
+        fc_strand = "0" if strand == "unstranded" else ("2" if strand == "RF" else "1")
         if merged_gtf.exists() and not fc_output.exists():
             all_bams = [
                 bam_dir / sid / f"{sid}_Aligned.sortedByCoord.out.bam"
@@ -1624,8 +1634,8 @@ class ModuleRunner:
                 fc_cmd = [
                     "featureCounts",
                     "-T", str(min(cfg.threads, 4)),
-                    "-g", "transcript_id",
-                    "-f",          # exon-level features, grouped by transcript_id
+                    "-g", "transcript_id",   # meta-feature: one row per transcript
+                    "-s", fc_strand,         # strandedness from M07 consensus
                     "-a", str(merged_gtf),
                     "-o", str(fc_output),
                 ]

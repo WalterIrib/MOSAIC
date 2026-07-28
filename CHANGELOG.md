@@ -23,11 +23,19 @@ values produces incorrect p-values and fold changes without any error or warning
 
 **Fix:** Added a `featureCounts` step in `mosaic/pipeline.py` (`_run_m16_stringtie`) that
 runs after gffcompare. `featureCounts` counts reads from all canonical BAMs against the
-StringTie merged GTF at transcript level (`-g transcript_id -f`), producing a raw integer
-count matrix (`featurecounts_transcripts.txt`). This file is passed to the R script via
+StringTie merged GTF at meta-feature level (`-g transcript_id`, one row per transcript;
+no `-f`), with strandedness from M07 (`-s 0/1/2`), producing a raw integer count matrix
+(`featurecounts_transcripts.txt`). This file is passed to the R script via
 `--feature-counts`. The DESeq2 section in `m16_stringtie_de.R` now reads from that matrix
 instead of the FPKM values. The FPKM file (`novel_transcript_fpkm.tsv`) is kept for
 display in HTML reports.
+
+**Known limitation:** `featureCounts` discards reads that map to exons shared between
+overlapping transcripts (multi-mapped at meta-feature level). Novel transcripts
+overlapping annotated loci or each other are therefore under-counted. For novel
+intergenic transcripts (class code `u`) the impact is minimal. Isoform-level rigour
+would require EM-based quantification (Salmon/RSEM) — out of scope for a
+screening-level module.
 
 Added `validate_count_matrix()` in `m16_stringtie_de.R`: rejects matrices with
 non-integer or negative values before they reach DESeq2, with an explicit error message
