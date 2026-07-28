@@ -269,11 +269,16 @@ if (!is.null(novel_tmap) && nrow(novel_tmap) > 0) {
 write_tsv(novel_fpkm, file.path(opt$outdir, "novel_transcript_fpkm.tsv"))
 
 # ── 4. DE analysis on novel transcripts (featureCounts raw counts → DESeq2) ───
+# DESeq2 dispersion estimation fits a mean-dispersion curve across all features.
+# Running on only the ~67 pre-filtered novel transcripts collapses the empirical
+# Bayes shrinkage → underestimated dispersions → anti-conservative p-values.
+# FIX: build DESeqDataSet on the FULL featureCounts matrix (~507K transcripts),
+# estimate dispersions globally, then extract results only for novel transcript IDs.
 cat("[INF] DE analysis on novel transcripts...\n")
 
 if (!requireNamespace("DESeq2", quietly=TRUE)) {
   cat("[WARN] DESeq2 not available — skipping DE\n")
-} else if (nrow(novel_fpkm) < 3) {
+} else if (length(novel_ids) < 3) {
   cat("[WARN] Too few novel transcripts for DE\n")
 } else if (is.null(fc_counts)) {
   cat("[WARN] featureCounts matrix not available — skipping DESeq2.\n")
@@ -289,48 +294,37 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
     coldata$sample_id %in% colnames(fc_counts) &
     coldata$condition %in% c(opt$treatment, opt$control)
   ]
-  keep_ids    <- novel_ids[novel_ids %in% rownames(fc_counts)]
 
-  if (length(keep_ids) < 3) {
-    cat(sprintf("[WARN] Only %d novel IDs found in featureCounts matrix — skipping DE\n",
-                length(keep_ids)))
+  # Full matrix: all transcripts (known + novel) × comparison samples
+  full_mat <- fc_counts[, sample_cols, drop=FALSE]
+  full_mat <- full_mat[rowSums(full_mat) > 0, ]  # remove all-zero rows
+  cat(sprintf("[INF] Full matrix for dispersion estimation: %d transcripts × %d samples\n",
+              nrow(full_mat), ncol(full_mat)))
+
+  tryCatch(
+    validate_count_matrix(full_mat, "M16 featureCounts (full matrix)"),
+    error = function(e) { cat(conditionMessage(e), "\n"); stop(e) }
+  )
+
+  if (nrow(full_mat) < 100 || ncol(full_mat) < 4) {
+    cat("[WARN] Insufficient transcripts/samples for DESeq2\n")
   } else {
-    count_mat <- fc_counts[keep_ids, sample_cols, drop=FALSE]
+    cd_full <- coldata[match(sample_cols, coldata$sample_id), , drop=FALSE]
+    cd_full$condition <- factor(cd_full$condition,
+                                levels=c(opt$control, opt$treatment))
 
-    tryCatch(
-      validate_count_matrix(count_mat, "M16 featureCounts"),
-      error = function(e) { cat(conditionMessage(e), "\n"); stop(e) }
-    )
+    dds_full <- DESeqDataSetFromMatrix(full_mat, cd_full, ~condition)
+    dds_full <- DESeq(dds_full, quiet=TRUE)
 
-    keep_rows <- rowSums(count_mat) > 0
-    count_mat <- count_mat[keep_rows, ]
-    cat(sprintf("[INF] Non-zero novel transcripts for DE: %d\n", nrow(count_mat)))
+    # Extract results only for novel transcript IDs (those present in matrix)
+    keep_ids <- novel_ids[novel_ids %in% rownames(dds_full)]
+    cat(sprintf("[INF] Novel transcripts in full matrix: %d\n", length(keep_ids)))
 
-    # Per-group min_samples filter: keep transcripts with count>0 in >=N
-    # samples of at least one condition.
-    min_s <- opt[["min-samples"]]
-    treat_ids   <- coldata$sample_id[coldata$condition == opt$treatment]
-    control_ids <- coldata$sample_id[coldata$condition == opt$control]
-    treat_ids   <- treat_ids[treat_ids %in% colnames(count_mat)]
-    control_ids <- control_ids[control_ids %in% colnames(count_mat)]
-    n_treat   <- rowSums(count_mat[, treat_ids,   drop=FALSE] > 0)
-    n_control <- rowSums(count_mat[, control_ids, drop=FALSE] > 0)
-    keep_samples <- (n_treat >= min_s) | (n_control >= min_s)
-    count_mat <- count_mat[keep_samples, ]
-    cat(sprintf("[INF] After min_samples>=%d per group: %d transcripts\n",
-                min_s, nrow(count_mat)))
-
-    if (nrow(count_mat) >= 3 && ncol(count_mat) >= 4) {
-      cd <- coldata[match(colnames(count_mat), coldata$sample_id), ]
-      cd$condition <- factor(cd$condition,
-                             levels=c(opt$control, opt$treatment))
-
-      dds <- DESeqDataSetFromMatrix(count_mat, cd, ~condition)
-      dds <- DESeq(dds, quiet=TRUE)
-      res <- results(dds,
-                     contrast=c("condition", opt$treatment, opt$control),
-                     alpha=opt$padj)
-      res_df <- as.data.frame(res) |>
+    if (length(keep_ids) >= 3) {
+      res    <- results(dds_full,
+                        contrast=c("condition", opt$treatment, opt$control),
+                        alpha=opt$padj)
+      res_df <- as.data.frame(res[keep_ids, ]) |>
         tibble::rownames_to_column("t_name") |>
         left_join(novel_fpkm |>
                     select(t_name, any_of(c("class_code","class_desc",
@@ -345,7 +339,8 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
 
       n_sig <- sum(!is.na(res_df$padj) & res_df$padj < opt$padj &
                      abs(res_df$log2FoldChange) > opt$lfc)
-      cat(sprintf("[INF] Significant novel DE transcripts: %d\n", n_sig))
+      cat(sprintf("[INF] Significant novel DE transcripts: %d / %d\n",
+                  n_sig, nrow(res_df)))
 
       p_vol <- res_df |>
         filter(!is.na(padj), !is.na(log2FoldChange)) |>
@@ -379,7 +374,7 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
       ggsave(file.path(opt$outdir, "novel_de_volcano.pdf"), p_vol, width=8, height=6)
       ggsave(file.path(opt$outdir, "novel_de_volcano.png"), p_vol, width=8, height=6, dpi=150)
     } else {
-      cat("[WARN] Insufficient transcripts/samples for DESeq2\n")
+      cat("[WARN] Too few novel IDs in featureCounts matrix — skipping DE\n")
     }
   }
 }

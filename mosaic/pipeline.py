@@ -1561,6 +1561,31 @@ class ModuleRunner:
 
         gtf = Path(cfg.databases.gtf)
 
+        # Per-sample strandedness flags for StringTie.
+        # FR → --fr, RF → --rf, unstranded → no flag (StringTie infers from
+        # splicing junctions). Mixed-strandedness datasets need this per-sample
+        # treatment — using a consensus flag for all samples would misassign
+        # reads in unstranded samples and create spurious x transcripts.
+        import csv as _csv
+        _strand_map: dict = {}
+        _strand_tsv = self.out / "mapping" / "strandedness.tsv"
+        if _strand_tsv.exists():
+            with open(_strand_tsv) as _fh:
+                for _row in _csv.DictReader(_fh, delimiter="\t"):
+                    _strand_map[_row["sample_id"]] = _row["strandedness"]
+            info(f"M16: per-sample strandedness from strandedness.tsv ({len(_strand_map)} samples)")
+        else:
+            _cs = self._get_consensus_strandedness()
+            for _sid in cfg.samples.sample_ids:
+                _strand_map[_sid] = _cs
+            info(f"M16: strandedness.tsv not found — using consensus '{_cs}' for all samples")
+
+        def _st_flag(sample_id: str) -> list:
+            s = _strand_map.get(sample_id, "unstranded")
+            if s == "FR":   return ["--fr"]
+            if s == "RF":   return ["--rf"]
+            return []
+
         # ── Pass 1: reference-guided assembly (no -e) ─────────────────────────
         # StringTie discovers novel transcripts when -e is absent. With -G it
         # uses the reference as a guide but is free to assemble new models.
@@ -1579,7 +1604,7 @@ class ModuleRunner:
                     "-G", str(gtf),
                     "-o", str(asm_gtf),
                     "-p", str(cfg.threads),
-                ], log_file=self._log("m16_stringtie_asm", sid))
+                ] + _st_flag(sid), log_file=self._log("m16_stringtie_asm", sid))
                 if ret != 0:
                     warn(f"StringTie assembly failed for {sid}")
 
@@ -1624,7 +1649,7 @@ class ModuleRunner:
                         "-o", str(quant_gtf),
                         "-e", "-b", str(sid_quant),
                         "-p", str(cfg.threads),
-                    ], log_file=self._log("m16_stringtie_quant", sid))
+                    ] + _st_flag(sid), log_file=self._log("m16_stringtie_quant", sid))
                     if ret != 0:
                         warn(f"StringTie re-quantification failed for {sid}")
 
@@ -2253,7 +2278,7 @@ class Pipeline:
             "m11b_promoter_te",
             "m20_meta", "m20b_humann",
             "m12_tetranscripts",
-            "m15_fusion", "m16_stringtie",
+            "m15_fusion",
         }
         # These run per-comparison (need comparison-specific DE data)
         # m11c_te_age, m11d_te_de, m17_rmats, m18_network,
