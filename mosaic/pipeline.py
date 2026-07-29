@@ -715,23 +715,33 @@ class ModuleRunner:
         comp = self._parse_comparison(comparison)
         treatment, control = comp if comp else (None, None)
 
-        # Global fallback strandedness (used only when M07 hasn't run for a sample)
-        global_strand = "unstranded"
-        if hasattr(cfg, "sequencing") and hasattr(cfg.sequencing, "strandedness"):
-            global_strand = cfg.sequencing.strandedness or "unstranded"
-
-        # Per-sample strandedness from M07 strandedness.tsv (preferred)
+        # Strandedness resolution (same priority as M16):
+        #   1. Explicit config (sequencing.strandedness != auto) → all samples
+        #   2. Per-sample from M07 strandedness.tsv (when config = auto)
+        #   3. Fallback: unstranded
         import csv as _csv
         strand_m07: dict[str, str] = {}
+        cfg_explicit_strand = getattr(cfg.library, "_strandedness_config", None)
         strand_tsv = self.out / "mapping" / "strandedness.tsv"
-        if strand_tsv.exists():
+        global_strand = "unstranded"
+
+        if cfg_explicit_strand and cfg_explicit_strand != "auto":
+            global_strand = cfg_explicit_strand
+            for _sid in cfg.samples.sample_ids:
+                strand_m07[_sid] = cfg_explicit_strand
+            info(f"M06: config strandedness='{cfg_explicit_strand}' (overrides M07; "
+                 f"set sequencing.strandedness: auto for per-sample detection)")
+        elif strand_tsv.exists():
             with open(strand_tsv) as fh:
                 for row in _csv.DictReader(fh, delimiter="\t"):
                     strand_m07[row["sample_id"]] = row["strandedness"].lower()
+                    global_strand = row["strandedness"].lower()  # last wins, used as fallback
             info(f"M06: loaded per-sample strandedness from {strand_tsv.name} "
                  f"({len(strand_m07)} samples)")
         else:
-            warn(f"M06: M07 strandedness.tsv not found — using global '{global_strand}' for all samples")
+            if hasattr(cfg, "sequencing") and hasattr(cfg.sequencing, "strandedness"):
+                global_strand = cfg.sequencing.strandedness or "unstranded"
+            warn(f"M06: M07 strandedness.tsv not found — using '{global_strand}' for all samples")
 
         # Patch cfg so run_m06 can access what it needs
         cfg_m06                    = type("C", (), {})()
@@ -1568,8 +1578,16 @@ class ModuleRunner:
         # reads in unstranded samples and create spurious x transcripts.
         import csv as _csv
         _strand_map: dict = {}
-        _strand_tsv = self.out / "mapping" / "strandedness.tsv"
-        if _strand_tsv.exists():
+        _cfg_explicit = getattr(cfg.library, "_strandedness_config", None)
+        _strand_tsv   = self.out / "mapping" / "strandedness.tsv"
+        if _cfg_explicit and _cfg_explicit != "auto":
+            # Explicit config value always wins over M07 inference.
+            # Use sequencing.strandedness: auto in config to enable per-sample inference.
+            for _sid in cfg.samples.sample_ids:
+                _strand_map[_sid] = _cfg_explicit
+            info(f"M16: config strandedness='{_cfg_explicit}' (overrides M07 inference; "
+                 f"set sequencing.strandedness: auto to use per-sample detection)")
+        elif _strand_tsv.exists():
             with open(_strand_tsv) as _fh:
                 for _row in _csv.DictReader(_fh, delimiter="\t"):
                     _strand_map[_row["sample_id"]] = _row["strandedness"]
