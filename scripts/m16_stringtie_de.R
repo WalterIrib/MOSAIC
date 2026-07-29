@@ -112,7 +112,7 @@ if (!is.null(tmap)) {
       description = class_desc[class_code] %||% "Unknown",
       novel = class_code %in% c("u","i","j","x","n","o")
     ) |>
-    arrange(desc(n))
+    arrange(dplyr::desc(n))
   print(cc_summary)
   write_tsv(cc_summary, file.path(opt$outdir, "class_code_summary.tsv"))
 
@@ -332,38 +332,47 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
       # Adds log2FoldChange_shrunk, lfcSE_shrunk, svalue columns.
       # Note: extreme padj values (e.g. near-zero within-group variance at n=3)
       # reflect genuine signal but are precision artefacts; padj is unchanged.
-      shrunk_df <- NULL
+      # IRanges masks dplyr::desc — use dplyr::desc() explicitly throughout.
+      shrunk_lfc  <- NULL
+      shrunk_se   <- NULL
+      shrunk_sval <- NULL
       if (requireNamespace("ashr", quietly=TRUE)) {
-        res_shrunk <- lfcShrink(dds_full,
-                                contrast=c("condition", opt$treatment, opt$control),
-                                type="ashr", quiet=TRUE)
-        shrunk_raw <- as.data.frame(res_shrunk) |>
-          tibble::rownames_to_column("t_name")
-        # svalue is stored in metadata by some DESeq2 versions; extract defensively
-        sval_vec <- tryCatch(res_shrunk$svalue, error=function(e) NULL)
-        if (!is.null(sval_vec)) {
-          shrunk_raw$svalue <- sval_vec
-        }
-        shrunk_cols <- c("t_name", "log2FoldChange", "lfcSE")
-        if ("svalue" %in% colnames(shrunk_raw)) shrunk_cols <- c(shrunk_cols, "svalue")
-        shrunk_df <- shrunk_raw |>
-          select(all_of(shrunk_cols)) |>
-          rename(log2FoldChange_shrunk=log2FoldChange, lfcSE_shrunk=lfcSE)
-        cat(sprintf("[INF] lfcShrink (ashr) applied — columns: %s\n",
-                    paste(colnames(shrunk_df)[-1], collapse=", ")))
+        tryCatch({
+          res_shrunk <- lfcShrink(dds_full,
+                                  contrast=c("condition", opt$treatment, opt$control),
+                                  type="ashr", quiet=TRUE)
+          # Extract by row name to stay robust to as.data.frame column naming
+          shrunk_lfc  <- as.numeric(res_shrunk[keep_ids, "log2FoldChange"])
+          shrunk_se   <- as.numeric(res_shrunk[keep_ids, "lfcSE"])
+          # svalue is stored in metadata in some DESeq2 versions; extract defensively
+          sval_all <- tryCatch(res_shrunk$svalue, error=function(e) NULL)
+          if (!is.null(sval_all)) {
+            shrunk_sval <- sval_all[match(keep_ids, rownames(res_shrunk))]
+          }
+          shrunk_cols_msg <- "log2FoldChange_shrunk, lfcSE_shrunk"
+          if (!is.null(shrunk_sval)) shrunk_cols_msg <- paste0(shrunk_cols_msg, ", svalue")
+          cat(sprintf("[INF] lfcShrink (ashr) applied — columns: %s\n", shrunk_cols_msg))
+        }, error=function(e) {
+          cat(sprintf("[WARN] lfcShrink failed: %s\n", conditionMessage(e)))
+        })
       } else {
         cat("[WARN] ashr not available — reporting unshrunken LFC only\n")
       }
 
+      # Build result data frame from unshrunken results (padj, pvalue always from results())
       res_df <- as.data.frame(res[keep_ids, ]) |>
-        tibble::rownames_to_column("t_name") |>
-        { df <- .
-          if (!is.null(shrunk_df)) {
-            left_join(df,
-                      shrunk_df |> filter(t_name %in% keep_ids),
-                      by="t_name")
-          } else df
-        }() |>
+        tibble::rownames_to_column("t_name")
+
+      # Add shrunken columns via direct assignment (avoids pipe block and IRanges masking)
+      if (!is.null(shrunk_lfc)) {
+        res_df$log2FoldChange_shrunk <- shrunk_lfc
+        res_df$lfcSE_shrunk          <- shrunk_se
+      }
+      if (!is.null(shrunk_sval)) {
+        res_df$svalue <- shrunk_sval
+      }
+
+      res_df <- res_df |>
         left_join(novel_fpkm |>
                     select(t_name, any_of(c("class_code","class_desc",
                                             "ref_gene_id","num_exons","len"))),
@@ -371,7 +380,7 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
         left_join(tx_meta |> select(t_name, chr, strand, start, end,
                                     gene_id, gene_name),
                   by="t_name") |>
-        arrange(padj, desc(abs(log2FoldChange)))
+        arrange(padj, dplyr::desc(abs(log2FoldChange)))
 
       write_tsv(res_df, file.path(opt$outdir, "novel_transcript_DE.tsv"))
 
