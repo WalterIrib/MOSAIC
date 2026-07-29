@@ -1698,7 +1698,9 @@ class ModuleRunner:
             info(f"  after class_code filter:    {after_code}")
             info(f"  after min_exons>={nc.min_exons}:          {after_exons}")
             info(f"  after min_length>={nc.min_length}:        {after_length}  → novel_transcripts.tmap")
-            info(f"  min_tpm>={nc.min_tpm} and min_samples>={nc.min_samples}: applied in R using t_data.ctab")
+            info(f"  min_cov>={nc.min_cov} (primary) and min_samples>={nc.min_samples}: applied in R using t_data.ctab")
+            if nc.min_tpm > 0:
+                info(f"  min_tpm>={nc.min_tpm} (secondary, disabled when 0): also applied")
 
         # ── featureCounts: raw integer counts from all BAMs vs merged GTF ────
         # Runs once (idempotent); output is reused across comparisons.
@@ -1747,6 +1749,7 @@ class ModuleRunner:
             "--control",     control,
             "--padj",        str(cfg.thresholds.padj),
             "--lfc",         str(cfg.thresholds.lfc),
+            "--min-cov",     str(cfg.m16_novel.min_cov),
             "--min-tpm",     str(cfg.m16_novel.min_tpm),
             "--min-samples", str(cfg.m16_novel.min_samples),
         ]

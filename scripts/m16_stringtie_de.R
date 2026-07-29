@@ -31,9 +31,9 @@ option_list <- list(
   make_option("--padj",           type="double",    default=0.05),
   make_option("--lfc",            type="double",    default=1.0),
   make_option("--min-cov",        type="double",    default=1.0,
-              help="Min mean coverage to keep transcript"),
-  make_option("--min-tpm",       type="double",    default=1.0,
-              help="Min mean TPM across all samples (from t_data.ctab; applied before DESeq2)"),
+              help="Min mean StringTie coverage (reads/bp) across all samples [primary filter]"),
+  make_option("--min-tpm",       type="double",    default=0.0,
+              help="Min mean FPKM across all samples (0 = disabled; biased against long transcripts)"),
   make_option("--min-samples",   type="integer",   default=2L,
               help="Min samples per group with count>0 (featureCounts; applied before DESeq2)")
 )
@@ -232,30 +232,35 @@ novel_cov   <- cov_wide  |> filter(t_name %in% novel_ids)
 
 cat(sprintf("[INF] Novel transcripts in matrix: %d\n", nrow(novel_fpkm)))
 
-# min_tpm filter: mean TPM across all samples from t_data.ctab (pass-4 re-quant).
-# stringtie --merge does not write TPM to merged.gtf, so TMAP TPM is always 0;
-# per-sample TPM from -e re-quantification is the correct source.
+# Primary filter: mean StringTie coverage (reads/bp) across all samples.
+# Coverage is NOT penalised by transcript length, making it appropriate for lncRNAs.
+min_cov <- opt[["min-cov"]]
+if (nrow(novel_cov) > 0 && min_cov > 0) {
+  cov_mat    <- as.matrix(novel_cov[, -1, drop=FALSE])
+  mean_cov   <- rowMeans(cov_mat, na.rm=TRUE)
+  keep       <- mean_cov >= min_cov
+  cat(sprintf("[INF] min_cov >= %.2f: %d / %d transcripts pass\n",
+              min_cov, sum(keep), nrow(novel_cov)))
+  novel_cov  <- novel_cov[keep, ]
+  novel_fpkm <- novel_fpkm |> filter(t_name %in% novel_cov$t_name)
+  novel_ids  <- novel_fpkm$t_name
+}
+
+# Secondary filter: mean FPKM across all samples (disabled by default, min_tpm=0).
+# Biased against long transcripts (FPKM normalises by length); kept for compatibility.
 min_tpm <- opt[["min-tpm"]]
 if (nrow(novel_fpkm) > 0 && min_tpm > 0) {
-  tpm_mat  <- as.matrix(novel_fpkm[, -1, drop=FALSE])
-  mean_tpm <- rowMeans(tpm_mat, na.rm=TRUE)
-  keep     <- mean_tpm >= min_tpm
-  cat(sprintf("[INF] min_tpm >= %.2f: %d / %d transcripts pass\n",
+  fpkm_mat <- as.matrix(novel_fpkm[, -1, drop=FALSE])
+  mean_fpkm <- rowMeans(fpkm_mat, na.rm=TRUE)
+  keep      <- mean_fpkm >= min_tpm
+  cat(sprintf("[INF] min_fpkm >= %.2f: %d / %d transcripts pass\n",
               min_tpm, sum(keep), nrow(novel_fpkm)))
   novel_fpkm <- novel_fpkm[keep, ]
   novel_ids  <- novel_fpkm$t_name
   novel_cov  <- novel_cov |> filter(t_name %in% novel_ids)
 }
 
-# Filter by minimum coverage
-if (nrow(novel_cov) > 0) {
-  cov_mat    <- as.matrix(novel_cov[,-1])
-  mean_cov   <- rowMeans(cov_mat, na.rm=TRUE)
-  keep       <- mean_cov >= opt[["min-cov"]]
-  novel_fpkm <- novel_fpkm[keep, ]
-  cat(sprintf("[INF] After min coverage filter (>= %.1f): %d transcripts\n",
-              opt[["min-cov"]], nrow(novel_fpkm)))
-}
+cat(sprintf("[INF] After coverage filter: %d transcripts\n", nrow(novel_fpkm)))
 
 # Add class code annotation — guard against empty novel_tmap
 if (!is.null(novel_tmap) && nrow(novel_tmap) > 0) {
@@ -344,8 +349,11 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
           # Extract by row name to stay robust to as.data.frame column naming
           shrunk_lfc  <- as.numeric(res_shrunk[keep_ids, "log2FoldChange"])
           shrunk_se   <- as.numeric(res_shrunk[keep_ids, "lfcSE"])
-          # svalue is stored in metadata in some DESeq2 versions; extract defensively
-          sval_all <- tryCatch(res_shrunk$svalue, error=function(e) NULL)
+          # svalue: ashr stores it in S4 metadata, not as a DataFrame column (DESeq2 1.50+)
+          sval_all <- tryCatch(
+            S4Vectors::metadata(res_shrunk)$svalue,
+            error=function(e) tryCatch(res_shrunk$svalue, error=function(e2) NULL)
+          )
           if (!is.null(sval_all)) {
             shrunk_sval <- sval_all[match(keep_ids, rownames(res_shrunk))]
           }

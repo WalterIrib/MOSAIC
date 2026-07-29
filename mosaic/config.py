@@ -292,7 +292,8 @@ class M16NovelConfig:
     class_codes: list  = dc.field(default_factory=lambda: ["u", "i", "x"])
     min_exons:   int   = 2
     min_length:  int   = 200
-    min_tpm:     float = 1.0
+    min_cov:     float = 1.0   # primary filter: mean StringTie coverage across all samples
+    min_tpm:     float = 0.0   # secondary filter: 0 = disabled (TPM penalises long transcripts)
     min_samples: int   = 2
 
 
@@ -703,7 +704,8 @@ def load_config(path: str | Path) -> MosaicConfig:
         class_codes=list(m16_raw.get("class_codes", ["u", "i", "x"])),
         min_exons=int(m16_raw.get("min_exons", 2)),
         min_length=int(m16_raw.get("min_length", 200)),
-        min_tpm=float(m16_raw.get("min_tpm", 1.0)),
+        min_cov=float(m16_raw.get("min_cov", 1.0)),
+        min_tpm=float(m16_raw.get("min_tpm", 0.0)),
         min_samples=int(m16_raw.get("min_samples", 2)),
     )
 
@@ -801,7 +803,8 @@ m16_novel:
   class_codes:  [u, i, x]   # j available but off by default
   min_exons:    2            # excludes mono-exonic fragments (known limitation: misses histone genes)
   min_length:   200
-  min_tpm:      1.0
+  min_cov:      1.0          # primary coverage filter: mean StringTie cov across all samples (reads/bp)
+  min_tpm:      0.0          # secondary FPKM/TPM filter: 0 = disabled (biased against long transcripts)
   min_samples:  2            # per group: count > 0 in >= N samples of at least one condition
 
 thresholds:
