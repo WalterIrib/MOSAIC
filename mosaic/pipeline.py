@@ -301,16 +301,39 @@ def _download_ssh(remote_path: str, outdir: Path) -> bool:
 def detect_strandedness(bam: Path, bed12: Path) -> str:
     """
     Run RSeQC infer_experiment.py and return strandedness call.
-    Returns: "RF" | "FR" | "unstranded"
+    Returns: "RF" | "FR" | "unstranded" | "undetermined"
     """
     stats = detect_strandedness_full(bam, bed12)
     return stats["strandedness"]
 
 
-def detect_strandedness_full(bam: Path, bed12: Path) -> dict:
+def detect_strandedness_full(
+    bam: Path,
+    bed12: Path,
+    min_informative: float = 0.20,
+    fr_threshold: float = 0.80,
+    rf_threshold: float = 0.20,
+) -> dict:
     """
     Run RSeQC infer_experiment.py and return full stats dict:
-      frac_rf, frac_fr, frac_failed, strandedness, strand_fc
+      frac_rf, frac_fr, frac_failed, informative, ratio_fr,
+      strandedness, strand_fc
+
+    Decision logic — normalised on informative reads:
+      informative = frac_fr + frac_rf
+      if informative < min_informative → "undetermined"  (not "unstranded")
+      ratio_fr = frac_fr / informative
+      if ratio_fr > fr_threshold  → "FR"
+      elif ratio_fr < rf_threshold → "RF"
+      else                        → "unstranded"
+
+    Rationale: on chromatin-associated and total-RNA protocols a large
+    fraction of reads falls outside annotated regions and RSeQC marks them
+    "failed to determine".  This compresses frac_fr/frac_rf towards zero
+    regardless of the actual library strandedness.  Normalising on the
+    informative fraction separates two genuinely different situations:
+      • genuinely ambiguous data  → informative < min_informative → "undetermined"
+      • high-failed-fraction but strongly stranded → ratio_fr near 1 → "FR"/"RF"
     """
     import re as _re
     result = subprocess.run(
@@ -332,23 +355,38 @@ def detect_strandedness_full(bam: Path, bed12: Path) -> dict:
         elif "failed to determine" in line:
             frac_fail = val
 
-    # frac_rf = "1++,1--,2+-,2-+" = R1 on same strand as gene = standard FR-forward
-    # frac_fr = "1+-,1-+,2++,2--" = R2 on same strand as gene = standard RF-dUTP
-    # featureCounts: -s 1 = R1 same as feature (fr-secondstrand)
-    #                -s 2 = R2 same as feature (fr-firststrand / dUTP / TruSeq Stranded)
-    if frac_rf > 0.7:
-        strand = "RF"
-    elif frac_fr > 0.7:
-        strand = "FR"
+    # frac_rf = "1++,1--,2+-,2-+" = R1 same strand as gene  (standard FR-secondstrand)
+    # frac_fr = "1+-,1-+,2++,2--" = R2 same strand as gene  (dUTP / TruSeq Stranded → FR)
+    # featureCounts: -s 1 = R1 same as feature (RF); -s 2 = R2 same as feature (FR)
+    informative = frac_fr + frac_rf
+    if informative < min_informative:
+        strand = "undetermined"
+        warn(
+            f"Strandedness undetermined: informative fraction {informative:.3f} "
+            f"< {min_informative} (frac_failed={frac_fail:.3f}). "
+            f"Check that the BED12 annotation covers this library type."
+        )
+        ratio_fr = float("nan")
     else:
-        strand = "unstranded"
+        ratio_fr = frac_fr / informative
+        if ratio_fr > fr_threshold:
+            strand = "FR"
+        elif ratio_fr < rf_threshold:
+            strand = "RF"
+        else:
+            strand = "unstranded"
+
+    # "undetermined" falls back to unstranded for downstream tools (safest default)
+    strand_fc = {"unstranded": "0", "RF": "1", "FR": "2"}.get(strand, "0")
 
     return {
-        "frac_rf":    frac_rf,
-        "frac_fr":    frac_fr,
-        "frac_failed": frac_fail,
+        "frac_rf":      frac_rf,
+        "frac_fr":      frac_fr,
+        "frac_failed":  frac_fail,
+        "informative":  informative,
+        "ratio_fr":     ratio_fr,
         "strandedness": strand,
-        "strand_fc":  {"unstranded": "0", "RF": "1", "FR": "2"}[strand],
+        "strand_fc":    strand_fc,
     }
 
 
@@ -962,7 +1000,7 @@ class ModuleRunner:
 
         cols = ["sample_id", "n_input_reads", "pct_uniquely_mapped",
                 "pct_multimapped", "frac_rf", "frac_fr", "frac_failed",
-                "strandedness", "strand_fc"]
+                "informative", "ratio_fr", "strandedness", "strand_fc"]
         rows = []
         strand_map = {}
 
@@ -973,15 +1011,27 @@ class ModuleRunner:
             star = parse_star_log(log)
 
             if bam.exists() and bed12 is not None:
-                st = detect_strandedness_full(bam, bed12)
+                st = detect_strandedness_full(
+                    bam, bed12,
+                    min_informative=cfg.quality.strandedness_min_informative,
+                    fr_threshold=cfg.quality.strandedness_fr_threshold,
+                    rf_threshold=cfg.quality.strandedness_rf_threshold,
+                )
+                ratio_str = (
+                    f"ratio_fr={st['ratio_fr']:.3f}"
+                    if st['ratio_fr'] == st['ratio_fr']  # not NaN
+                    else "ratio_fr=NaN"
+                )
                 info(f"  {sid}: {st['strandedness']} "
-                     f"(RF={st['frac_rf']:.3f} FR={st['frac_fr']:.3f})")
+                     f"(RF={st['frac_rf']:.3f} FR={st['frac_fr']:.3f} "
+                     f"failed={st['frac_failed']:.3f} {ratio_str})")
             else:
                 cfg_strand = getattr(cfg.library, "strandedness", None) or "unstranded"
                 if cfg_strand == "auto":
                     cfg_strand = "unstranded"
                 st = {
                     "frac_rf": 0.0, "frac_fr": 0.0, "frac_failed": 0.0,
+                    "informative": 0.0, "ratio_fr": float("nan"),
                     "strandedness": cfg_strand,
                     "strand_fc": {"unstranded": "0", "RF": "1", "FR": "2"}.get(cfg_strand, "0"),
                 }
@@ -996,6 +1046,10 @@ class ModuleRunner:
                 "frac_rf":             f"{st['frac_rf']:.4f}",
                 "frac_fr":             f"{st['frac_fr']:.4f}",
                 "frac_failed":         f"{st['frac_failed']:.4f}",
+                "informative":         f"{st['informative']:.4f}",
+                "ratio_fr":            (f"{st['ratio_fr']:.4f}"
+                                        if st['ratio_fr'] == st['ratio_fr']
+                                        else "NaN"),
                 "strandedness":        st["strandedness"],
                 "strand_fc":           st["strand_fc"],
             })

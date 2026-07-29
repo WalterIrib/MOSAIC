@@ -185,10 +185,32 @@ class QualityConfig:
     bam_mapping_rate_warning: float = 30.0
     min_length_kraken: int = 75        # separate threshold for Kraken2
 
+    # M07 strandedness inference — normalized on informative reads.
+    # On chromatin-associated and total RNA protocols a large fraction of reads
+    # fall outside annotated regions and are marked "failed" by RSeQC.  Using
+    # the raw frac_fr/frac_rf directly (< 0.7 threshold) treats these high-
+    # failed-fraction samples as unstranded — a systematic false negative.
+    # The corrected logic normalises on informative reads only:
+    #   informative = frac_fr + frac_rf
+    #   ratio_fr    = frac_fr / informative
+    # If informative < min_informative the data are truly ambiguous → "undetermined".
+    # Otherwise ratio_fr drives the call (fr_threshold / rf_threshold).
+    strandedness_min_informative: float = 0.20   # below this → undetermined
+    strandedness_fr_threshold:    float = 0.80   # ratio_fr above this → FR
+    strandedness_rf_threshold:    float = 0.20   # ratio_fr below this → RF
+
     def validate(self) -> None:
         if not 0.0 < self.strandedness_concordance_threshold <= 1.0:
             raise ConfigError(
                 "quality.strandedness_concordance_threshold must be in (0, 1]."
+            )
+        if not 0.0 < self.strandedness_min_informative < 1.0:
+            raise ConfigError(
+                "quality.strandedness_min_informative must be in (0, 1)."
+            )
+        if not self.strandedness_rf_threshold < self.strandedness_fr_threshold:
+            raise ConfigError(
+                "quality.strandedness_rf_threshold must be < strandedness_fr_threshold."
             )
         if self.min_reads_error >= self.min_reads_warning:
             raise ConfigError(
@@ -561,6 +583,9 @@ def load_config(path: str | Path) -> MosaicConfig:
         min_reads_error=q_raw.get("min_reads_error", 1_000_000),
         bam_mapping_rate_warning=q_raw.get("bam_mapping_rate_warning", 30.0),
         min_length_kraken=q_raw.get("min_length_kraken", 75),
+        strandedness_min_informative=float(q_raw.get("strandedness_min_informative", 0.20)),
+        strandedness_fr_threshold=float(q_raw.get("strandedness_fr_threshold", 0.80)),
+        strandedness_rf_threshold=float(q_raw.get("strandedness_rf_threshold", 0.20)),
     )
 
     circ_raw = raw.get("circrna", {})
@@ -844,6 +869,20 @@ modules:
   m20b_humann:       true
   m23_te_insertions: true
   m14_report:        true
+
+quality:
+  # M07 strandedness inference — normalised on informative reads.
+  # RSeQC marks reads that fall outside annotated regions as "failed to
+  # determine".  On chromatin-associated and total-RNA protocols this
+  # fraction can reach 30-50%, compressing frac_fr towards zero even for
+  # genuinely stranded libraries.  The normalised ratio avoids this:
+  #   informative = frac_fr + frac_rf
+  #   ratio_fr    = frac_fr / informative
+  # Samples with informative < min_informative are called "undetermined"
+  # (not "unstranded" — those are genuinely different biological situations).
+  strandedness_min_informative: 0.20  # below this → undetermined + warning
+  strandedness_fr_threshold:    0.80  # ratio_fr above this → FR
+  strandedness_rf_threshold:    0.20  # ratio_fr below this → RF
 
 threads: 20
 memory_gb: 30
