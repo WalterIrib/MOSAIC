@@ -370,7 +370,6 @@ class ModulesV2Config:
     m07_strandedness:  bool = True
     m08_deseq2:        bool = True
     m08b_qc:           bool = True
-    m09_satellite:     bool = True
     m10_go:            bool = True
     m11_te_host:       bool = True
     m11b_promoter_te:  bool = True
@@ -685,7 +684,6 @@ def load_config(path: str | Path) -> MosaicConfig:
         m07_strandedness=mod2_raw.get("m07_strandedness", True),
         m08_deseq2=mod2_raw.get("m08_deseq2", True),
         m08b_qc=mod2_raw.get("m08b_qc", True),
-        m09_satellite=mod2_raw.get("m09_satellite", True),
         m10_go=mod2_raw.get("m10_go", True),
         m11_te_host=mod2_raw.get("m11_te_host", True),
         m11b_promoter_te=mod2_raw.get("m11b_promoter_te", True),
@@ -853,7 +851,6 @@ modules:
   m06_circrna:       true
   m07_strandedness:  true
   m08_deseq2:        true
-  m09_satellite:     true
   m10_go:            true
   m11_te_host:       true
   m11b_promoter_te:  true

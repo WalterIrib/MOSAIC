@@ -28,8 +28,7 @@ to its tool and to the Results/figures it feeds.
 | M05 | TE **&** satellite family quantification (DFAM consensus pseudochromosomes) | bowtie2 2.5.4 | §4.2, §4.5 |
 | M06 | circRNA detection (screening) | CIRI2 2.0.6 | §4.2 |
 | M07 | Strandedness inference | RSeQC 5.0.4 | §4.2 |
-| M08 / M08b | Gene DE + factorial interaction; QC/biotype | featureCounts 2.1.1 + DESeq2 1.50.2 (ashr) | §4.2, §4.4; Tab 2, Fig 2 |
-| M09 | Satellite family DE (+ Wilcoxon) | DESeq2 + bowtie2 counts | §4.2; Fig 3C |
+| M08 / M08b | Gene DE + factorial interaction; satellite family DE (+ Wilcoxon); QC/biotype | featureCounts 2.1.1 + DESeq2 1.50.2 (ashr) | §4.2, §4.4; Tab 2, Fig 2–3 |
 | M10 | GO / KEGG enrichment | clusterProfiler 4.18.4 | §4.2, §4.4 |
 | M11 / M11b–d | TE→host mapping, promoter/body TE, TE age, Fisher enrichment | bedtools 2.31.1 / R | §4.2 |
 | M12 | **TE locus-level DE by direct overlap counting (no EM)** | bedtools 2.31.1 + DESeq2 | §4.2, §4.5 |

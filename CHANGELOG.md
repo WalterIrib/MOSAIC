@@ -2,6 +2,40 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [Unreleased] — 2026-07-30 — M09 removed; M07: strandedness inference rewritten; undetermined state; configurable thresholds
+
+### M09 removed — module numbering preserved for traceability
+
+**M09 (satellite family quantification by bowtie2 re-alignment) has been removed from the pipeline.**
+Module numbering is intentionally not renumbered: a gap between M08 and M10 is preferable to renaming,
+which would invalidate references in the CHANGELOG, canonical run logs, and the paper.
+
+**Structural failure — the module was silently non-functional on all paired-end datasets:**
+bowtie2 with `--very-sensitive-local` on DFAM satellite consensus sequences (the only supported
+reference in M09) produces 0% alignment on paired-end libraries, because satellite consensus
+sequences are typically shorter than the paired-end insert size. The output SAM files were always
+empty; no error or warning was raised. No existing run of the pipeline has ever produced a non-empty
+M09 output.
+
+**Functionality already covered by M05 + M08:**
+Satellite family quantification is performed by M05 (bowtie2 on DFAM pseudochromosomes, single-end
+mode, with proper handling of read length vs. consensus length). Satellite family DE (DESeq2 +
+Wilcoxon) is performed by M08 using those M05 counts. All satellite results in the paper (Fig. 3C,
+16 families upregulated in late senescence, 5 in early, HSATII highlighted) derive from M05 + M08,
+not from M09. M09 had no unique output read by any other module.
+
+**Files removed/updated:**
+- `mosaic/pipeline.py`: `_run_m09_satellite()` method deleted; `MODULE_DEPS["m09_satellite"]`
+  deleted; `COMP_INDEPENDENT` set updated.
+- `mosaic/config.py`: `ModulesV2Config.m09_satellite` field removed.
+- `config.yaml`, `config_template.yaml`, `configs/config_charna.yaml`: `m09_satellite` key removed.
+- `environment.yml`: bowtie2 comment updated (M05 only).
+- `README.md`: M09 row removed; M08 description updated to include satellite DE.
+- `tests/smoke_test.py`: `test_m09_satellite_de()` renamed to `test_satellite_de()` with explicit
+  note that the output is from M08 (counts from M05).
+
+---
+
 ## [Unreleased] — 2026-07-30 — M07: strandedness inference rewritten; undetermined state; configurable thresholds
 
 ### M07 — strandedness inference normalised on informative reads; "undetermined" state added

@@ -36,7 +36,7 @@ dependencies:
   # ── Alignment ──────────────────────────────────────────────────────────────
   - star=2.7.10b
   - hisat2=2.2.2                 # independent validation pipeline (§4.7)
-  - bowtie2=2.5.4                # TE/satellite family quantification (M05/M09)
+  - bowtie2=2.5.4                # TE/satellite family quantification (M05)
   # ── Quantification / utilities ─────────────────────────────────────────────
   - subread=2.1.1                # featureCounts (M08)
   - bedtools=2.31.1              # TE locus overlap counting (M12)

@@ -15,7 +15,7 @@ Run:
     # or standalone:
     python tests/smoke_test.py
 
-Design: backbone/analysis modules (m02, m04, m05, m08, m09, m12, m17, m19, m14)
+Design: backbone/analysis modules (m02, m04, m05, m08, m12, m17, m19, m14)
 must produce output. Heavy/underpowered-on-4-samples modules (m10 GO, m18 WGCNA,
 m16, m23) only need to NOT crash the pipeline (continue_on_error). The whole run
 must finish with the report present.
@@ -138,9 +138,10 @@ def test_m08_gene_de_schema():
     assert _rows(f) > 0, "m08: gene DE table empty"
 
 
-def test_m09_satellite_de():
+def test_satellite_de():
+    # satellite DE is produced by M08 (DESeq2), using counts from M05
     f = _glob1(f"**/satellite_{COMP}_DE.tsv")
-    assert _nonempty(f), "m09: satellite DE table missing"
+    assert _nonempty(f), "m08: satellite DE table missing"
     assert "family_id" in _header(f)
 
 

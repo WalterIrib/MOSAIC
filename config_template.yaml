@@ -130,7 +130,6 @@ modules:
   m06_circrna:      true   # circRNA detection (DCC, STAR chimeric junctions)
   m07_strandedness: true   # strandedness inference (RSeQC)
   m08_deseq2:       true   # differential expression
-  m09_satellite:    true   # satellite quantification
   m10_go:           true   # GO/KEGG/DO enrichment
   m11_te_host:      true   # TE host genes
   m11b_promoter_te: true   # TE in promoters

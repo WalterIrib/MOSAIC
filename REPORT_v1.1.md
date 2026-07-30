@@ -93,7 +93,7 @@ fixes above were both **found by this run**.
 |------|--------|
 | m02 trim / m04 STAR BAM / m05 TE family counts | PASS (files + schema) |
 | m08 gene DE schema (`baseMean`,`log2FoldChange`,`padj`,`log2FoldChange_shrunk`) | PASS |
-| m09 satellite DE / m12 locus DE schema (`locus_id`) / m17 splicing / m19 editing | PASS |
+| satellite DE (M08, counts from M05) / m12 locus DE schema (`locus_id`) / m17 splicing / m19 editing | PASS |
 | **M14 report named for the correct comparison** (fig.path cross-wiring regression) | PASS |
 | **M14 per-comparison `fig.path` directory** (`m14_report_files_mito-ChaRNA_vs_ChaRNA`) | PASS |
 | **M14 significant count in report == significant-table rows** (points == rows) | PASS |

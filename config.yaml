@@ -36,7 +36,6 @@ modules:
   m07_strandedness: true
   m08_deseq2: true
   m08b_qc: true
-  m09_satellite: true
   m10_go: true
   m11_te_host: true
   m11b_promoter_te: true

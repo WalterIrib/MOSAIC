@@ -42,7 +42,6 @@ MODULE_DEPS: Dict[str, List[str]] = {
     "m07_strandedness":["m04_star"],
     "m08_deseq2":      ["m04_star", "m05_te_count"],
     "m08b_qc":         ["m08_deseq2"],
-    "m09_satellite":   ["m02_trim"],
     "m10_go":          ["m08_deseq2"],
     "m11_te_host":     ["m04_star"],
     "m11b_promoter_te":["m11_te_host"],
@@ -1322,68 +1321,6 @@ class ModuleRunner:
             "--control",     control,
         ], log_file=self._log("m08b_qc", comparison)) == 0
 
-    # ── M09: Satellite quantification ────────────────────────────────────────
-
-    def _run_m09_satellite(self, comparison=None) -> bool:
-        cfg     = self.cfg
-        trim_dir = self.out / "trimmed"
-        out_dir  = self.out / "satellite_counts"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        sat_fa   = Path(cfg.databases.te_satellite)
-        layout   = cfg.library.layout
-
-        if not sat_fa.exists():
-            warn(f"Satellite consensus not found: {sat_fa}")
-            return True  # non-blocking
-
-        # Build bowtie2 index if missing
-        bt2_idx = sat_fa.parent / sat_fa.stem
-        if not (sat_fa.parent / f"{sat_fa.stem}.1.bt2").exists() and            not (sat_fa.parent / f"{sat_fa.stem}.1.bt2l").exists():
-            info(f"Building bowtie2 index for satellite consensus...")
-            ret = run_cmd(["bowtie2-build", str(sat_fa), str(bt2_idx)],
-                          log_file=self._log("m09_bt2_build"))
-            if ret != 0:
-                warn("bowtie2-build failed for satellite — skipping")
-                return True  # non-blocking
-
-        all_ok = True
-        processed = 0
-        fastq_dir = Path(cfg.samples.fastq_dir)
-        for sid in cfg.samples.sample_ids:
-            r1 = trim_dir / sid / f"{sid}_R1_trimmed.fastq.gz"
-            # Fallback to original FASTQ if trimmed not available
-            if not r1.exists():
-                r1 = fastq_dir / sid / f"{sid}_R1.fastq.gz"
-            if not r1.exists():
-                r1 = fastq_dir / sid / f"{sid}_1.fastq.gz"
-            if not r1.exists():
-                warn(f"No reads found for {sid} — skipping satellite count")
-                continue
-            processed += 1
-            sid_out = out_dir / sid
-            sid_out.mkdir(exist_ok=True)
-            reads = [str(r1)]
-            if layout == "PE":
-                r2 = trim_dir / sid / f"{sid}_R2_trimmed.fastq.gz"
-                if r2.exists():
-                    reads.append(str(r2))
-
-            ret = run_cmd([
-                "bowtie2",
-                "--very-sensitive-local",
-                "-x", str(sat_fa.parent / sat_fa.stem),
-                "-1" if layout == "PE" else "-U", reads[0],
-            ] + (["-2", reads[1]] if len(reads) > 1 else []) + [
-                "--no-unal", "-p", str(cfg.threads),
-                "-S", str(sid_out / f"{sid}_satellite.sam"),
-            ], log_file=self._log("m09_satellite", sid))
-            if ret != 0:
-                all_ok = False
-        if processed == 0:
-            warn("No reads found for satellite counting — skipping")
-            return True  # non-blocking
-        return all_ok
-
     # ── M11: TE host genes ────────────────────────────────────────────────────
 
     def _run_m11_te_host(self, comparison=None) -> bool:
@@ -2349,7 +2286,7 @@ class Pipeline:
         COMP_INDEPENDENT = {
             "m00_download", "m02_trim", "m04_star",
             "m05_te_count", "m07_strandedness",
-            "m09_satellite", "m11_te_host",
+            "m11_te_host",
             "m11b_promoter_te",
             "m20_meta", "m20b_humann",
             "m12_tetranscripts",
