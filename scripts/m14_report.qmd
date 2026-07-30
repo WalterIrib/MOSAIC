@@ -2642,35 +2642,60 @@ if (!is.null(st_class_codes)) {
 
 ## Novel Transcript DE
 
+```{r novel-de-setup}
+# Split novel_de by class for downstream sections.
+# u (intergenic) and i (intronic) are the primary novel transcript classes.
+# x (antisense) is reported separately: ~70% of DE x candidates have exonic overlap
+# with their sense gene on the opposite strand — count-based quantification
+# (featureCounts) cannot fully resolve reads between overlapping antisense features,
+# producing LFC correlation with the sense gene (Pearson r 0.60–0.90).
+novel_ui <- if (!is.null(novel_de)) filter(novel_de, class_code %in% c("u","i")) else NULL
+novel_x  <- if (!is.null(novel_de)) filter(novel_de, class_code == "x")           else NULL
+```
+
 ```{r novel-de-summary}
 if (!is.null(novel_de)) {
-  n_sig <- sum(!is.na(novel_de$padj) & novel_de$padj < padj_thr &
-                 abs(novel_de$log2FoldChange) > lfc_thr, na.rm=TRUE)
-  cat(sprintf("Novel transcripts tested: %d\n", nrow(novel_de)))
-  cat(sprintf("Significant (padj<%.2f, |LFC|>%.1f): %d\n", padj_thr, lfc_thr, n_sig))
+  is_sig <- function(df)
+    !is.na(df$padj) & df$padj < padj_thr & abs(df$log2FoldChange) > lfc_thr
+
+  cat("Novel transcripts tested (all classes):", nrow(novel_de), "\n\n")
+  for (cls in c("u","i","x")) {
+    sub <- novel_de[novel_de$class_code == cls, ]
+    if (nrow(sub) == 0) next
+    cat(sprintf("  class %s: %d tested, %d DE (padj<%.2f |LFC|>%.1f)%s\n",
+                cls, nrow(sub), sum(is_sig(sub)),
+                padj_thr, lfc_thr,
+                if (cls=="x") "  [see caveat below]" else ""))
+  }
 } else {
-  # Explain based on StringTie assembly results
   if (!is.null(st_summary)) {
     novel_n <- tryCatch({
       novel_row <- st_summary[grepl("Novel candidates", st_summary[[1]], ignore.case=TRUE), ]
       if (nrow(novel_row) > 0) as.integer(novel_row[[2]][1]) else NA
     }, error=function(e) NA)
     if (!is.na(novel_n) && novel_n == 0) {
-      cat("No novel transcripts to test: StringTie assembly found 0 novel transcript candidates.\n")
-      cat("All assembled transcripts match GENCODE annotation exactly (class_code '=').\n")
-      cat("This is the expected result when the reference annotation covers all detected isoforms.\n")
+      cat("No novel transcripts: StringTie assembly found 0 novel candidates.\n")
+      cat("All assembled transcripts match GENCODE annotation (class_code '=').\n")
     } else {
       cat("Novel DE data not available (novel_transcript_DE.tsv not generated).\n")
     }
   } else {
-    cat("Novel DE data not available (StringTie output or novel_transcript_DE.tsv missing).\n")
+    cat("Novel DE data not available.\n")
   }
 }
 ```
 
-```{r novel-de-volcano, fig.height=6, fig.width=9, fig.cap="Volcano plot of novel transcript differential expression. Each point is a StringTie-assembled novel transcript not matching GENCODE annotation. Red = up-regulated in treatment; blue = down-regulated. Labels show transcript IDs of most significant events."}
-if (!is.null(novel_de) && nrow(novel_de) > 0) {
-  novel_de |>
+### Novel transcripts — intergenic (u) and intronic (i)
+
+Intergenic (u) and intronic (i) transcripts are the primary novel transcript classes.
+Class u transcripts have no overlap with any annotated gene; class i transcripts fall
+entirely within the intron of an annotated gene. Neither class shows exonic overlap with
+annotated features on the same strand (verified by bedtools intersect), so read assignment
+by featureCounts is unambiguous.
+
+```{r novel-de-volcano-ui, fig.height=6, fig.width=9, fig.cap="Volcano plot: novel u+i transcripts (intergenic and intronic). Red = up-regulated in treatment; blue = down-regulated."}
+if (!is.null(novel_ui) && nrow(novel_ui) > 0) {
+  novel_ui |>
     filter(!is.na(padj), !is.na(log2FoldChange)) |>
     mutate(
       sig = padj < padj_thr & abs(log2FoldChange) > lfc_thr,
@@ -2681,47 +2706,92 @@ if (!is.null(novel_de) && nrow(novel_de) > 0) {
       ),
       lab = ifelse(sig, t_name, NA)
     ) |>
-    ggplot(aes(x=log2FoldChange, y=-log10(padj+1e-10), color=col)) +
+    ggplot(aes(x=log2FoldChange, y=-log10(padj+1e-10), color=col, shape=class_code)) +
     geom_point(alpha=0.7, size=1.8) +
     ggrepel::geom_text_repel(aes(label=lab), size=2.5,
                               max.overlaps=15, show.legend=FALSE) +
-    scale_color_manual(values=c(UP="#E74C3C",DOWN="#3498DB",NS="#BDC3C7"),
-                       name=NULL) +
-    geom_vline(xintercept=c(-lfc_thr, lfc_thr),
-               linetype="dashed", color="grey50") +
-    geom_hline(yintercept=-log10(padj_thr),
-               linetype="dashed", color="grey50") +
-    labs(title="Novel transcript DE - volcano",
-         subtitle=comp_label,
-         x=lfc_label,
-         y="-log10(padj)") +
+    scale_color_manual(values=c(UP="#E74C3C",DOWN="#3498DB",NS="#BDC3C7"), name=NULL) +
+    scale_shape_manual(values=c(u=16, i=17), name="class") +
+    geom_vline(xintercept=c(-lfc_thr, lfc_thr), linetype="dashed", color="grey50") +
+    geom_hline(yintercept=-log10(padj_thr),      linetype="dashed", color="grey50") +
+    labs(title="Novel transcript DE (u + i) — volcano",
+         subtitle=comp_label, x=lfc_label, y="-log10(padj)") +
     theme_minimal(base_size=12)
-} else cat("Novel DE data not available.
-")
+} else cat("No u/i novel transcripts available.\n")
 ```
 
-```{r novel-de-table}
-if (!is.null(novel_de) && nrow(novel_de) > 0) {
-  novel_de |>
+```{r novel-de-table-ui}
+if (!is.null(novel_ui) && nrow(novel_ui) > 0) {
+  novel_ui |>
     filter(!is.na(padj)) |>
     arrange(padj, desc(abs(log2FoldChange))) |>
     head(50) |>
     mutate(
-      log2FC = round(log2FoldChange, 3),
-      padj   = formatC(padj, digits=3, format="g")
+      log2FC    = round(log2FoldChange, 3),
+      padj_fmt  = formatC(padj, digits=3, format="g"),
+      sense_LFC = round(sense_LFC, 3)
     ) |>
     select(Transcript=t_name,
-           any_of(c("class_code","class_desc","ref_gene_id",
-                    "chr","strand","gene_id","gene_name")),
-           log2FC, padj) |>
+           any_of(c("class_code","ref_gene_id","chr","strand","gene_name")),
+           log2FC, padj=padj_fmt,
+           any_of(c("sense_LFC","delta_LFC","has_exonic_overlap"))) |>
     DT::datatable(
-      caption="Top 50 novel DE transcripts. class_code: j=new junction combo, u=intergenic, i=intronic, x=antisense.",
+      caption=paste0(
+        "Top 50 novel DE transcripts (class u+i). ",
+        "sense_LFC: LFC of the overlapping annotated gene (from M08); ",
+        "delta_LFC: |LFC_novel| - |LFC_sense|; ",
+        "has_exonic_overlap: novel exon overlaps annotated exon on same strand."),
       options=list(pageLength=15, scrollX=TRUE,
                    dom="Bfrtip", buttons=c("csv","excel")),
       extensions="Buttons", rownames=FALSE
     )
-} else cat("Novel DE table not available.
-")
+} else cat("No u/i novel transcript table available.\n")
+```
+
+### Antisense transcripts (class x) — diagnostic only
+
+> **Caveat:** Class x transcripts (gffcompare: exonic overlap on the opposite strand of
+> an annotated gene) are not included in the primary novel transcript analysis. Empirical
+> testing showed that approximately 70% of DE class x candidates share exonic sequence
+> with their sense gene. Count-based quantification (featureCounts) assigns reads from the
+> genomic locus to both the novel antisense transcript and the annotated sense gene,
+> producing correlated LFC estimates (Pearson r 0.60–0.90 across comparisons). This
+> correlation persists even in the subset without exonic overlap (r 0.64–0.84), likely
+> reflecting locus-level co-regulation rather than a technical artefact. Class x is
+> retained in `novel_transcript_DE.tsv` with diagnostic columns (`has_exonic_overlap`,
+> `sense_LFC`, `delta_LFC`) for manual inspection of individual candidates.
+
+```{r novel-de-table-x}
+if (!is.null(novel_x) && nrow(novel_x) > 0) {
+  n_x_sig <- sum(!is.na(novel_x$padj) & novel_x$padj < padj_thr &
+                 abs(novel_x$log2FoldChange) > lfc_thr, na.rm=TRUE)
+  cat(sprintf("Class x: %d tested, %d DE (padj<%.2f |LFC|>%.1f)\n",
+              nrow(novel_x), n_x_sig, padj_thr, lfc_thr))
+  if (n_x_sig > 0) {
+    novel_x |>
+      filter(!is.na(padj), padj < padj_thr, abs(log2FoldChange) > lfc_thr) |>
+      arrange(padj) |>
+      head(30) |>
+      mutate(
+        log2FC   = round(log2FoldChange, 3),
+        padj_fmt = formatC(padj, digits=3, format="g")
+      ) |>
+      select(Transcript=t_name,
+             any_of(c("ref_gene_id","chr","strand","gene_name")),
+             log2FC, padj=padj_fmt,
+             any_of(c("has_exonic_overlap","sense_LFC","delta_LFC"))) |>
+      DT::datatable(
+        caption=paste0(
+          "Class x DE transcripts (diagnostic, not in primary analysis). ",
+          "has_exonic_overlap: x exon overlaps annotated exon (any strand); ",
+          "sense_LFC: LFC of opposite-strand reference gene; ",
+          "delta_LFC: |LFC_novel| - |LFC_sense| (larger values = more independent from sense gene)."),
+        options=list(pageLength=15, scrollX=TRUE,
+                     dom="Bfrtip", buttons=c("csv","excel")),
+        extensions="Buttons", rownames=FALSE
+      )
+  }
+} else cat("No class x transcripts available.\n")
 ```
 
 # Differential Alternative Splicing (M17 — rMATS)

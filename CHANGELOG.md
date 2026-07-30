@@ -2,6 +2,93 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [Unreleased] — 2026-07-30 — M07: strandedness inference rewritten; undetermined state; configurable thresholds
+
+### M07 — strandedness inference normalised on informative reads; "undetermined" state added
+
+**Problem:** On chromatin-enriched or total RNA libraries, 30–50% of reads fall outside
+annotated gene regions (high `frac_failed`). The old logic used raw `frac_fr` against a
+fixed 0.70 threshold. With `frac_failed ≥ 0.30`, a genuinely FR library can have
+`frac_fr ≈ 0.65`, falling below the threshold and being incorrectly called "unstranded".
+Affected libraries in this project: 4 of 9 De Cecco 2019 samples (EP1, SEN_E1, SEN_E2,
+SEN_L3), all genuinely FR at ratio_fr 98.6–99.1% when normalised correctly.
+
+**Fix in `mosaic/pipeline.py` — `detect_strandedness_full()`:**
+The strandedness call is now made on the fraction of informative reads only:
+```
+informative = frac_fr + frac_rf
+ratio_fr    = frac_fr / informative
+```
+A new `undetermined` state is returned when `informative < min_informative` (default 0.20),
+distinguishing it from `unstranded` (both strands detectable, ratio_fr ≈ 0.5). The old
+"unstranded" label now means the library is genuinely unstranded; "undetermined" means
+the annotation does not cover enough of the library to make a reliable call.
+
+**New configurable thresholds in `mosaic/config.py` — `QualityConfig`:**
+```yaml
+quality:
+  strandedness_min_informative: 0.20  # below this → undetermined
+  strandedness_fr_threshold:    0.80  # above this → FR
+  strandedness_rf_threshold:    0.20  # below this → RF; between → unstranded
+```
+Validation ensures `rf_threshold < fr_threshold` and both are in (0, 1).
+
+**Extended `strandedness.tsv` output columns:**
+Added `informative` (frac_fr + frac_rf), `ratio_fr` (frac_fr/informative), and `strand_fc`
+(featureCounts code: 0/1/2). `frac_rf`, `frac_fr`, `frac_failed` retained.
+
+**Impact on canonical results:** Modules M08, M12, M17 read strandedness from
+`_get_consensus_strandedness()`, which returns the config value immediately when
+`strandedness ≠ "auto"`. Both METACAR and De Cecco configs use explicit `strandedness: FR`,
+so strandedness.tsv content does not affect any canonical result. The fix matters for future
+runs with `strandedness: auto` on chromatin-enriched libraries.
+
+---
+
+## [Unreleased] — 2026-07-29 — M16: class x antisense transcripts excluded from primary analysis; novel_transcript_DE.tsv enriched with diagnostic columns
+
+### M16 — class x (antisense) transcripts excluded from primary novel transcript analysis
+
+**Context:** StringTie with gffcompare assigns class code `x` to novel transcripts with
+exonic overlap on the opposite strand of an annotated gene (i.e., antisense). Class `u`
+(intergenic) and `i` (intronic) have no same-strand exonic overlap with annotated features
+and are quantified unambiguously by featureCounts.
+
+**Known limitation — count-based quantification cannot resolve antisense from sense on overlapping features:**
+
+Empirical testing on two independent datasets (METACAR, De Cecco 2019) after correction
+to uniform FR strandedness showed:
+
+- ~70% of DE class x candidates share exonic sequence with their sense gene (bedtools
+  intersect, any strand). Pearson correlation between LFC(x) and LFC(sense gene) was
+  0.60–0.90 across comparisons.
+- The remaining ~30% without exonic overlap retain a correlation of 0.64–0.84, suggesting
+  locus-level co-regulation rather than a purely technical artefact.
+- The exonic overlap arises because the genomic locus of the x transcript coincides with
+  the sense gene; featureCounts assigns reads from that locus to both features.
+
+**Changes:**
+
+1. `novel_transcript_DE.tsv` retains **all class codes** (u, i, x) with a `class_code`
+   column. Three diagnostic columns are added by a post-processing step:
+   - `sense_LFC`: LFC of the opposite-strand annotated gene from M08 (same comparison).
+   - `delta_LFC`: |LFC_novel| − |LFC_sense|. Larger values indicate the novel transcript
+     changes more independently from its sense gene.
+   - `has_exonic_overlap`: `TRUE` if any exon of the x transcript overlaps any annotated
+     exon (bedtools intersect, any strand, computed on all x transcripts, not only DE ones).
+     Always `FALSE` for class i and u (verified empirically: 0/61 and 0/188 same-strand
+     overlap for i; 0 for u).
+
+2. `m14_report.qmd` now separates the Novel Transcript DE section into two subsections:
+   - **u + i** (primary): volcano plot and top-50 table with diagnostic columns.
+   - **x** (diagnostic only): a separate table with the caveat above, not included in
+     primary analysis counts.
+
+**For class i and u:** zero same-strand exonic overlap confirms unambiguous read assignment
+by featureCounts (FR/RF strand-specific). These classes remain in the primary analysis.
+
+---
+
 ## [Unreleased] — 2026-07-28 — M16: two-pass StringTie, full-matrix DESeq2, lfcShrink, per-sample strandedness
 
 ### M16 — two-pass StringTie workflow for novel transcript discovery
