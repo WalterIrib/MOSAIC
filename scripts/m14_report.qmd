@@ -2667,6 +2667,10 @@ if (!is.null(novel_de)) {
                 padj_thr, lfc_thr,
                 if (cls=="x") "  [see caveat below]" else ""))
   }
+  novel_ui_all <- novel_de[novel_de$class_code %in% c("u","i"), ]
+  if (nrow(novel_ui_all) > 0)
+    cat(sprintf("  u+i total: %d tested, %d DE  [primary novel DE count cited in paper]\n",
+                nrow(novel_ui_all), sum(is_sig(novel_ui_all))))
 } else {
   if (!is.null(st_summary)) {
     novel_n <- tryCatch({
