@@ -2567,7 +2567,7 @@ if (!is_interaction && !is.null(m12_gene_hits) && nrow(m12_gene_hits) > 0) {
 ### Significant Loci Detail
 
 ```{r m12-table}
-if (!is_interaction && !is.null(tet_sig) && nrow(te_features) > 0) {
+if (!is_interaction && !is.null(tet_sig) && nrow(tet_sig) > 0 && nrow(te_features) > 0) {
   disp_df <- te_features
 
   # Add gene name column for overlapping genes
