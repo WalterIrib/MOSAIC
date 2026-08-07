@@ -2733,7 +2733,7 @@ if (!is.null(novel_ui) && nrow(novel_ui) > 0) {
     mutate(
       log2FC    = round(log2FoldChange, 3),
       padj_fmt  = formatC(padj, digits=3, format="g"),
-      sense_LFC = round(sense_LFC, 3)
+      across(any_of("sense_LFC"), ~round(.x, 3))
     ) |>
     select(Transcript=t_name,
            any_of(c("class_code","ref_gene_id","chr","strand","gene_name")),
