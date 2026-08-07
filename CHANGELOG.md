@@ -2,6 +2,53 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [Unreleased] — 2026-08-07 — M16: three bugs fixed (B1 numeric sample_id, B2/B3 strandedness inversion)
+
+### M16: strandedness and sample-ID bugs — all class A
+
+Three bugs introduced on 2026-07-28 (B2/B3) and present since numeric sample IDs were supported
+(B1) are fixed. **Impact:** M16 novel-transcript results in all paper datasets are invalid and must
+be regenerated. All other modules (M05, M08, M12, M17, M19) are unaffected: they use the shared
+`strandedness_to_featurecounts()` helper or have correct inline mappings (confirmed by systematic
+grep audit 2026-08-07).
+
+**B3 — StringTie strand flag inverted in `_st_flag()` (`pipeline.py:1592–1595`)**
+
+`_st_flag()` returned `["--fr"]` for MOSAIC label `FR` (dUTP, R2-on-sense) and `["--rf"]` for `RF`.
+Correct mapping is the reverse: MOSAIC `FR` → StringTie `--rf` (dUTP); MOSAIC `RF` → StringTie
+`--fr` (ligation). Introduced in commit `686c6e9` (2026-07-28). Canonical paper runs executed
+2026-07-29: all ChaRNA/mito-ChaRNA StringTie assemblies used `--fr` on a dUTP library.
+
+Empirical impact (ChaRNA1, P1 test 2026-08-07): ratio i/x flips 8.1× (0.47 → 3.82). 34% of
+transcripts correctly classified as intronic (`i`) with `--rf` were misclassified as antisense (`x`)
+with `--fr`. 2,413 of 136,337 transcripts (1.77%) have explicit strand inversion between assemblies.
+
+Fix: swapped `["--fr"]` ↔ `["--rf"]` in `_st_flag()`.
+
+**B2 — featureCounts `-s` flag inverted in M16 (`pipeline.py:1727`)**
+
+M16 featureCounts used an inline ternary `"2" if strand == "RF" else "1"` — the inverse of the
+correct mapping. MOSAIC `FR` → should be `-s 2`; was producing `-s 1` (reversely stranded → simply
+stranded). Does NOT call `strandedness_to_featurecounts()`. Introduced in commit `75b86db`
+(2026-07-28). Canonical paper runs used `-s 1` on all 12 METACAR samples and all 9 De Cecco
+samples.
+
+Evidence: `m08_featurecounts_mito-ChaRNA_vs_ChaRNA.log` shows `Strand specific: reversely stranded`
+(-s 2, correct, via helper); `m16_rerun_20260729_151833.log` shows `-s 1` explicit (wrong, inline).
+
+Fix: replaced inline expression with `strandedness_to_featurecounts(strand, cfg.library.layout)`,
+identical to the M08 call at line 1089.
+
+**B1 — numeric `sample_id` used as positional column index in `m16_stringtie_de.R:298`**
+
+When `coldata$sample_id` is read as integer by `read.table`, the expression
+`fc_counts[, sample_cols]` performs positional indexing (e.g., column 1881793) instead of
+name-based lookup. Produces `subscript out of bounds` on any dataset with numeric sample IDs.
+Datasets with alphanumeric IDs (METACAR: `ChaRNA1`, De Cecco: `GSM*`) are not affected — the bug
+was silent in all paper runs but would crash any service delivery with numeric IDs.
+
+Fix: wrapped result in `as.character()` to force name-based column selection.
+
 ## [Unreleased] — 2026-07-30 — M09 removed; M07: strandedness inference rewritten; undetermined state; configurable thresholds
 
 ### M09 removed — module numbering preserved for traceability
