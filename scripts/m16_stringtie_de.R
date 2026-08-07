@@ -295,10 +295,10 @@ if (!requireNamespace("DESeq2", quietly=TRUE)) {
 
   # Subset to only treatment and control samples; coldata may contain
   # additional conditions that would produce NA in the DESeq2 design.
-  sample_cols <- coldata$sample_id[
+  sample_cols <- as.character(coldata$sample_id[
     coldata$sample_id %in% colnames(fc_counts) &
     coldata$condition %in% c(opt$treatment, opt$control)
-  ]
+  ])
 
   # Full matrix: all transcripts (known + novel) × comparison samples
   full_mat <- fc_counts[, sample_cols, drop=FALSE]
