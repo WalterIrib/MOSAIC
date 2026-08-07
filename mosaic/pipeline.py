@@ -1591,8 +1591,8 @@ class ModuleRunner:
 
         def _st_flag(sample_id: str) -> list:
             s = _strand_map.get(sample_id, "unstranded")
-            if s == "FR":   return ["--fr"]
-            if s == "RF":   return ["--rf"]
+            if s == "FR":   return ["--rf"]   # dUTP: R2 on sense → --rf
+            if s == "RF":   return ["--fr"]   # ligation: R1 on sense → --fr
             return []
 
         # ── Pass 1: reference-guided assembly (no -e) ─────────────────────────
@@ -1724,7 +1724,7 @@ class ModuleRunner:
         fc_output = out_dir / "featurecounts_transcripts.txt"
         merged_gtf = out_dir / "merged.gtf"
         strand    = self._get_consensus_strandedness()
-        fc_strand = "0" if strand == "unstranded" else ("2" if strand == "RF" else "1")
+        fc_strand = strandedness_to_featurecounts(strand, cfg.library.layout)
         if merged_gtf.exists() and not fc_output.exists():
             all_bams = [
                 bam_dir / sid / f"{sid}_Aligned.sortedByCoord.out.bam"
