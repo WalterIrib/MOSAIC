@@ -2,6 +2,44 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [1.1.2] — 2026-08-10 — M14: Kraken2/Bracken version strings corrected in report template
+
+### M14 report: metatranscriptomics version strings — documentation fix only
+
+Two version strings in `scripts/m14_report.qmd` were misaligned with the tool versions actually
+installed in the `mosaic` conda environment.
+
+**Change 1 — metatranscriptomics narrative block (line 3712):**
+
+| Field | Before | After |
+|-------|--------|-------|
+| Kraken2 version | v2.1.3 | v2.17.1 |
+| Database name | k2_minusb | Kraken2 Standard (k=35, built 2024-09-13) |
+| Bracken version | (not stated) | v3.0.1 |
+
+**Change 2 — methods footer (line 4237):**
+
+`Kraken2 + Bracken v2.1.3` → `Kraken2 v2.17.1 + Bracken v3.0.1 (Kraken2 Standard database, k=35,
+build 2024-09-13; paired-end mode, species-level re-estimation)`
+
+**Verification:**
+
+```
+$ conda run -n mosaic kraken2 --version
+Kraken version 2.17.1
+
+$ conda run -n mosaic bracken -v
+Bracken v3.0.1
+```
+
+All six supplementary HTML reports (DataS1–S6) regenerated from the corrected qmd on 2026-08-10.
+No quantitative results are affected: this is a documentation-only change.
+
+**DECISIONS.md:** D3 added — M14 module-state gating is filesystem-based (`dir.exists()`), not
+config-driven; logged as a known design limitation for v2.0.
+
+---
+
 ## [Unreleased] — 2026-08-07 — M16: three bugs fixed (B1 numeric sample_id, B2/B3 strandedness inversion)
 
 ### M16: strandedness and sample-ID bugs — all class A

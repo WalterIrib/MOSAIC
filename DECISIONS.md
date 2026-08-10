@@ -26,3 +26,27 @@ For FR libraries, this yields `"yes"` — which is incorrect (FR/dUTP should map
 **Latent failure mode:** An RF-strandedness dataset (non-dUTP stranded, R1 on sense) with `m19_editing: true` would receive `RF-FIRSTSTRAND` instead of the correct `FR-SECONDSTRAND`, producing erroneous editing site calls.
 
 **Fix for v1.1.2:** Add `--lib-type` passthrough in `_run_m19_editing()` mapping MOSAIC strandedness → JACUSA2 lib-type (FR→RF-FIRSTSTRAND, RF→FR-SECONDSTRAND, unstranded→UNSTRANDED).
+
+---
+
+### D3: M14 module-state inferred from filesystem, not from config or pipeline state
+
+**Location:** `scripts/m14_report.qmd:3704`
+
+**What it does:** `.m20_enabled <- dir.exists(file.path(out, "m20_metatranscriptomics"))`. The report decides
+whether to render the M20 section by checking whether the output directory exists on disk, not by reading
+`m20_meta: true/false` from the config or from `.mosaic_state.json`.
+
+**Observed failure mode:** When M14 was re-rendered for DECECCA2019 on 2026-08-07 (16:10–16:46), the
+`m20_metatranscriptomics/` directory did not yet exist (the M20 De Cecco run completed later the same day).
+The section therefore rendered the "disabled" fallback message despite the module being fully supported. The
+HTMLs were promoted to canonical before the inconsistency was noticed. A subsequent re-render after
+`m20_metatranscriptomics/` was populated corrected the output.
+
+**Same family as:** D1/D2 — pipeline produces output silently inconsistent with what a reader of the config
+would expect. D1/D2 affect quantitative results; D3 affects only report rendering completeness.
+
+**Fix for v2.0 (scope model):** M14 should receive an explicit module-state map (derived from
+`.mosaic_state.json` or from `Pipeline.state`) rather than probing the filesystem directly. This is the
+broader "scope model" refactor: each module declares its outputs and status explicitly; downstream consumers
+(including the report) read that declaration, not the disk.

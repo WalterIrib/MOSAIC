@@ -3709,7 +3709,7 @@ if (!.m20_enabled) {
 }
 ```
 
-> Reads not mapping to the human reference genome (STAR unmapped) were classified taxonomically using Kraken2 v2.1.3 with the k2_minusb database. Bracken estimated species-level abundances. Homo sapiens reads excluded from microbial analysis.
+> Reads not mapping to the human reference genome (STAR unmapped) were classified taxonomically using Kraken2 v2.17.1 with the Kraken2 Standard database (k=35, built 2024-09-13). Bracken v3.0.1 estimated species-level abundances. Homo sapiens reads excluded from microbial analysis.
 
 
 ## Classification Summary
@@ -4234,7 +4234,7 @@ if (!is_interaction && !is.null(.te_origin_summary) && nrow(.te_origin_summary) 
 
 ## Read Processing
 
-Reads trimmed with fastp 0.22.0 (auto adapter detection, Q20, min length 36bp). Genome alignment: STAR 2.7.10b two-pass mode with GENCODE v49 splice site annotation (`--twopassMode Basic`, `--outReadsUnmapped Fastx`). Strandedness inferred per-sample with RSeQC infer_experiment.py; library strandedness set in config (`sequencing.strandedness`). Gene counts: featureCounts (subread 2.0.6), `-t exon -g gene_id -s 2 --fracOverlap 0.1 -p --countReadPairs` (strandedness flag set from config value, not from RSeQC per-sample detection — config takes precedence for all quantification). circRNA detection: STAR chimeric junction files (`--chimOutType SeparateSAMold Junctions`, `--chimSegmentMin 20`, `--chimJunctionOverhangMin 15`) → DCC v0.5.0 (`-D -F -Nr 2 1`). Chimeric.out.sam output is unchanged (SeparateSAMold retained for M15/M23 compatibility). Unmapped reads classified taxonomically with Kraken2 + Bracken v2.1.3 (paired-end mode, species-level re-estimation). RNA editing: JACUSA2 v2.1.16 call-2 (`-filterNH 1`). TE somatic insertions: soft-clipped sequences from STAR chimeric SAM aligned to DFAM 3.9 TE consensus with BWA-MEM 0.7.18.
+Reads trimmed with fastp 0.22.0 (auto adapter detection, Q20, min length 36bp). Genome alignment: STAR 2.7.10b two-pass mode with GENCODE v49 splice site annotation (`--twopassMode Basic`, `--outReadsUnmapped Fastx`). Strandedness inferred per-sample with RSeQC infer_experiment.py; library strandedness set in config (`sequencing.strandedness`). Gene counts: featureCounts (subread 2.0.6), `-t exon -g gene_id -s 2 --fracOverlap 0.1 -p --countReadPairs` (strandedness flag set from config value, not from RSeQC per-sample detection — config takes precedence for all quantification). circRNA detection: STAR chimeric junction files (`--chimOutType SeparateSAMold Junctions`, `--chimSegmentMin 20`, `--chimJunctionOverhangMin 15`) → DCC v0.5.0 (`-D -F -Nr 2 1`). Chimeric.out.sam output is unchanged (SeparateSAMold retained for M15/M23 compatibility). Unmapped reads classified taxonomically with Kraken2 v2.17.1 + Bracken v3.0.1 (Kraken2 Standard database, k=35, build 2024-09-13; paired-end mode, species-level re-estimation). RNA editing: JACUSA2 v2.1.16 call-2 (`-filterNH 1`). TE somatic insertions: soft-clipped sequences from STAR chimeric SAM aligned to DFAM 3.9 TE consensus with BWA-MEM 0.7.18.
 
 ## TE Quantification — Pseudochromosome Approach
 
