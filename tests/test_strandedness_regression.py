@@ -338,10 +338,13 @@ class TestB1_M14_BiotypeWilcox:
             capture_output=True, text=True, timeout=30,
         )
 
-    def test_row_oob_returns_na_silently(self):
+    def test_row_oob_crashes_with_integer_sids(self):
         """
-        Pre-fix: integer row subscript OOB returns NA without error.
-        This is the silent-wrong-output scenario (no crash, bad result).
+        Pre-fix: integer treat_s used as positional row index on a matrix.
+        Large IDs like 1881793 are way out of bounds → subscript OOB crash.
+        Same crash class as column OOB (both crash with large integers).
+        The biotype-wilcox chunk may have tryCatch wrapping, explaining why
+        the render continued past step 24 and failed at step 58 instead.
         """
         r_code = textwrap.dedent("""
             norm_counts <- matrix(c(10.0, 20.0, 30.0, 40.0), nrow=2,
@@ -349,15 +352,20 @@ class TestB1_M14_BiotypeWilcox:
                                                 c("geneA","geneB")))
             # Pre-fix: treat_s is integer — used as positional row index
             treat_s_buggy <- c(1881793L, 1881794L)
-            result <- norm_counts[treat_s_buggy, "geneA", drop=TRUE]
-            # Row 1881793 and 1881794 don't exist → NA, but no error
-            stopifnot(all(is.na(result)))
-            cat("BUG_CONFIRMED: row OOB returns NA silently, no error\\n")
+            result <- tryCatch(
+                norm_counts[treat_s_buggy, "geneA", drop=TRUE],
+                error = function(e) e$message
+            )
+            if (is.character(result) && nchar(result) > 0) {
+                cat("BUG_CONFIRMED: row OOB with large integer crashes:", result, "\\n")
+            } else {
+                stop("Expected OOB error not raised")
+            }
         """)
         proc = self._run_r(r_code)
         assert proc.returncode == 0
         assert "BUG_CONFIRMED" in proc.stdout, \
-            f"Expected silent NA not reproduced:\n{proc.stdout}"
+            f"Pre-fix crash not reproducible:\n{proc.stdout}"
 
     def test_as_character_fixes_row_lookup(self):
         """Post-fix: as.character(treat_s) selects rows by name → correct values."""
@@ -385,22 +393,24 @@ class TestB1_M14_BiotypeWilcox:
             f"R crashed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
         assert "PASS" in proc.stdout
 
-    def test_column_vs_row_oob_behaviour_documented(self):
+    def test_both_row_and_column_oob_crash_with_large_integers(self):
         """
-        Document R OOB behaviour: column OOB crashes, row OOB returns NA silently.
-        This asymmetry explains why M14 step 58/281 crashed but step 24/281 did not.
+        Both row OOB and column OOB crash when the integer index is far out of bounds.
+        This is the same crash class.  The biotype-wilcox chunk (step 24/281) likely
+        has a tryCatch wrapping the wilcox.test call that swallows the error,
+        which is why the render continued and crashed later at step 58/281.
         """
         r_code = textwrap.dedent("""
             m <- matrix(1:4, nrow=2, dimnames=list(c("r1","r2"), c("c1","c2")))
-            # Row OOB: silent NA
+            # Row OOB with large integer: also crashes
             row_result <- tryCatch(m[999L, "c1", drop=TRUE],
-                                   error=function(e) "ERROR")
-            stopifnot(is.na(row_result))  # NA, not error
-            # Column OOB: error
+                                   error=function(e) paste("ERROR:", e$message))
+            stopifnot(grepl("ERROR", row_result))
+            # Column OOB with large integer: crashes
             col_result <- tryCatch(m["r1", 999L, drop=TRUE],
                                    error=function(e) paste("ERROR:", e$message))
             stopifnot(grepl("ERROR", col_result))
-            cat("DOCUMENTED: row OOB → NA (silent), column OOB → error\\n")
+            cat("DOCUMENTED: both row and column OOB crash with large integers\\n")
         """)
         proc = self._run_r(r_code)
         assert proc.returncode == 0
@@ -535,7 +545,7 @@ class TestB1_M12_IntersectSafe:
         The character result of intersect() can be used safely as column subscript.
         """
         r_code = textwrap.dedent("""
-            mat <- matrix(1:6, nrow=3,
+            mat <- matrix(1:6, nrow=2,
                           dimnames=list(NULL, c("1881793","1881794","1881795")))
             int_ids <- c(1881793L, 1881794L)
             chr_names <- c("1881793","1881794","1881795")
