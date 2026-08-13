@@ -1497,7 +1497,7 @@ if (!is.null(sat_sig) && nrow(sat_sig) > 0) {
 
 ### Satellite DE — Wilcoxon per Family
 
-> DESeq2 BH correction with n=3 per group and 35 families collapses all padj=1 (insufficient power). Wilcoxon rank-sum test applied per family without multiple-testing correction gives nominal p-values useful for ranking. Use for exploratory ranking only.
+> DESeq2 BH correction with n=3 per group and 35 families collapses all padj=1 (insufficient power). Wilcoxon rank-sum test applied per family without multiple-testing correction gives nominal p-values useful for ranking. **Use for exploratory ranking only — the significantly DE satellite families cited in the main text come from the aggregate family-level DESeq2 in §3.4 above, not from this per-family test.**
 
 
 ```{r sat-wilcox-proxy-note, results='asis'}
