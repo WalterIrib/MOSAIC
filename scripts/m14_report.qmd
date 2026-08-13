@@ -817,8 +817,8 @@ if (!is_interaction && !is.null(norm_counts) && !is.null(gene_map) && length(con
   cat_map_vec <- setNames(classify_bt(gene_map$gene_type), gene_map$gene_id)
   common_g    <- intersect(rownames(norm_counts), names(cat_map_vec))
   sids        <- intersect(colnames(norm_counts), names(conditions))
-  treat_s <- coldata$sample_id[coldata$condition == p$treatment]
-  ctrl_s  <- coldata$sample_id[coldata$condition == p$control]
+  treat_s <- as.character(coldata$sample_id[coldata$condition == p$treatment])
+  ctrl_s  <- as.character(coldata$sample_id[coldata$condition == p$control])
   treat_s <- treat_s[treat_s %in% sids]
   ctrl_s  <- ctrl_s[ctrl_s %in% sids]
 
@@ -1508,8 +1508,8 @@ if (is_interaction) {
 
 ```{r sat-wilcox-per-family-run, fig.height=6, fig.width=10, fig.cap="Satellite family Wilcoxon test (nominal p-value, uncorrected). Red = higher in treatment; blue = lower in treatment. Point size = baseMean. Dashed line = p=0.05."}
 if (!is_interaction && !is.null(sat_counts) && !is.null(coldata_all) && nrow(sat_counts) > 0) {
-  treat_sids   <- coldata_all$sample_id[coldata_all$condition == p$treatment]
-  control_sids <- coldata_all$sample_id[coldata_all$condition == p$control]
+  treat_sids   <- as.character(coldata_all$sample_id[coldata_all$condition == p$treatment])
+  control_sids <- as.character(coldata_all$sample_id[coldata_all$condition == p$control])
   all_sids     <- c(treat_sids, control_sids)
   # Keep only columns that exist in sat_counts
   treat_sids   <- treat_sids[treat_sids %in% colnames(sat_counts)]
@@ -1569,8 +1569,8 @@ if (!is_interaction && !is.null(sat_counts) && !is.null(coldata_all) && nrow(sat
 # Compute aggregated satellite data (used by table and plot chunks below)
 .sat_agg_ok <- FALSE
 if (!is_interaction && !is.null(sat_counts) && !is.null(coldata_all) && nrow(sat_counts) > 0) {
-  .treat_sids_agg   <- coldata_all$sample_id[coldata_all$condition == p$treatment]
-  .control_sids_agg <- coldata_all$sample_id[coldata_all$condition == p$control]
+  .treat_sids_agg   <- as.character(coldata_all$sample_id[coldata_all$condition == p$treatment])
+  .control_sids_agg <- as.character(coldata_all$sample_id[coldata_all$condition == p$control])
   .treat_sids_agg   <- .treat_sids_agg[.treat_sids_agg %in% colnames(sat_counts)]
   .control_sids_agg <- .control_sids_agg[.control_sids_agg %in% colnames(sat_counts)]
 
@@ -3731,7 +3731,7 @@ if (!is.null(meta_summary)) {
   # Fall back to showing per-sample microbial read counts from abundance matrix
   if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
     meta_col3 <- if (!is.null(coldata) && nrow(coldata)>0) coldata else coldata_all
-    sids_meta <- meta_col3$sample_id[meta_col3$sample_id %in% colnames(meta_abund)]
+    sids_meta <- as.character(meta_col3$sample_id[meta_col3$sample_id %in% colnames(meta_abund)])
     if (length(sids_meta) > 0) {
       micro_totals <- colSums(meta_abund[, sids_meta, drop=FALSE])
       cond_map_m <- setNames(meta_col3$condition, meta_col3$sample_id)
@@ -3759,7 +3759,7 @@ if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
   if (is.null(meta_coldata)) {
     cat("Coldata not available — cannot plot microbial abundance.\n")
   } else {
-  sample_cols <- meta_coldata$sample_id[meta_coldata$sample_id %in% colnames(meta_abund)]
+  sample_cols <- as.character(meta_coldata$sample_id[meta_coldata$sample_id %in% colnames(meta_abund)])
   if (length(sample_cols) == 0) {
     cat("No matching samples between coldata and microbial abundance matrix.\n")
   } else {
@@ -3799,7 +3799,7 @@ if (!.m20_enabled) invisible(NULL) else
 if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
   meta_coldata2 <- if (!is.null(coldata) && nrow(coldata)>0) coldata else coldata_all
   sample_cols_m <- if (!is.null(meta_coldata2))
-    meta_coldata2$sample_id[meta_coldata2$sample_id %in% colnames(meta_abund)] else character(0)
+    as.character(meta_coldata2$sample_id[meta_coldata2$sample_id %in% colnames(meta_abund)]) else character(0)
   if (length(sample_cols_m) == 0) {
     cat("No matching samples — coldata not available.\n")
   } else {
@@ -3846,7 +3846,7 @@ if (!is.null(meta_diversity)) {
 ```{r meta-beta-pca, fig.height=5, fig.width=10}
 if (!.m20_enabled) invisible(NULL) else
 if (!is.null(meta_abund) && nrow(meta_abund) > 0) {
-  sample_cols_b <- coldata$sample_id[coldata$sample_id %in% colnames(meta_abund)]
+  sample_cols_b <- as.character(coldata$sample_id[coldata$sample_id %in% colnames(meta_abund)])
   if (length(sample_cols_b) >= 3) {
     mat_b <- as.matrix(meta_abund[, sample_cols_b])
     # Bray-Curtis dissimilarity

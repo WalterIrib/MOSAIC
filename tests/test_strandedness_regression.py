@@ -253,6 +253,305 @@ class TestB1_NumericSampleID:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# B1 extension — M14 sat-wilcox: column OOB crash (same pattern as M16)
+# treat_sids used as column subscript in sat_counts[fam, treat_sids, drop=TRUE]
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestB1_M14_SatWilcox:
+    """
+    M14 sat-wilcox-per-family-run chunk: treat_sids used as column subscript.
+    Without as.character(), large integer IDs cause 'undefined columns selected'.
+    Crash confirmed in Lucibello run at step 58/281.
+    """
+
+    def _run_r(self, code: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["conda", "run", "-n", "mosaic", "Rscript", "--vanilla", "-e", code],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    def test_column_obb_crash_with_integer_sids(self):
+        """Pre-fix: integer treat_sids used as column subscript → OOB crash."""
+        r_code = textwrap.dedent("""
+            sat_counts <- matrix(as.integer(1:8), nrow=2,
+                                 dimnames=list(c("fam1","fam2"),
+                                               c("1881793","1881794","1881795","1881796")))
+            treat_sids_buggy <- c(1881793L, 1881794L)
+            result <- tryCatch(
+                sat_counts["fam1", treat_sids_buggy, drop=TRUE],
+                error = function(e) e$message
+            )
+            if (is.character(result) && nchar(result) > 0) {
+                cat("BUG_CONFIRMED: column OOB with integer sids:", result, "\\n")
+            } else {
+                stop("Expected OOB error not raised")
+            }
+        """)
+        proc = self._run_r(r_code)
+        assert proc.returncode == 0
+        assert "BUG_CONFIRMED" in proc.stdout, \
+            f"Pre-fix crash not reproducible:\n{proc.stdout}"
+
+    def test_as_character_fixes_column_lookup(self):
+        """Post-fix: as.character(treat_sids) selects columns by name correctly."""
+        r_code = textwrap.dedent("""
+            sat_counts <- matrix(as.integer(1:8), nrow=2,
+                                 dimnames=list(c("fam1","fam2"),
+                                               c("1881793","1881794","1881795","1881796")))
+            coldata_all <- data.frame(
+                sample_id = c(1881793L, 1881794L, 1881795L, 1881796L),
+                condition = c("treatment","treatment","control","control"),
+                stringsAsFactors = FALSE
+            )
+            p <- list(treatment="treatment", control="control")
+            # Post-fix form:
+            treat_sids   <- as.character(coldata_all$sample_id[coldata_all$condition == p$treatment])
+            control_sids <- as.character(coldata_all$sample_id[coldata_all$condition == p$control])
+            stopifnot(is.character(treat_sids), length(treat_sids) == 2)
+            sub <- sat_counts["fam1", treat_sids, drop=TRUE]
+            stopifnot(length(sub) == 2)
+            cat("PASS: as.character() fixes column OOB in M14 sat-wilcox\\n")
+        """)
+        proc = self._run_r(r_code)
+        assert proc.returncode == 0, \
+            f"R crashed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+        assert "PASS" in proc.stdout
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# B1 extension — M14 biotype-wilcox: row OOB silent failure
+# treat_s used as row subscript in norm_counts[treat_s, gene, drop=TRUE]
+# Row OOB with integer → NA (no crash), silently corrupts Wilcoxon results.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestB1_M14_BiotypeWilcox:
+    """
+    M14 biotype-wilcox chunk: treat_s used as row subscript in norm_counts.
+    Integer IDs used as row positions (out of bounds) → NA silently.
+    No crash at step 24/281, but all Wilcoxon p-values become NA (wrong output).
+    Fix: as.character(treat_s) → name-based row lookup → correct values.
+    """
+
+    def _run_r(self, code: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["conda", "run", "-n", "mosaic", "Rscript", "--vanilla", "-e", code],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    def test_row_oob_returns_na_silently(self):
+        """
+        Pre-fix: integer row subscript OOB returns NA without error.
+        This is the silent-wrong-output scenario (no crash, bad result).
+        """
+        r_code = textwrap.dedent("""
+            norm_counts <- matrix(c(10.0, 20.0, 30.0, 40.0), nrow=2,
+                                  dimnames=list(c("1881793","1881794"),
+                                                c("geneA","geneB")))
+            # Pre-fix: treat_s is integer — used as positional row index
+            treat_s_buggy <- c(1881793L, 1881794L)
+            result <- norm_counts[treat_s_buggy, "geneA", drop=TRUE]
+            # Row 1881793 and 1881794 don't exist → NA, but no error
+            stopifnot(all(is.na(result)))
+            cat("BUG_CONFIRMED: row OOB returns NA silently, no error\\n")
+        """)
+        proc = self._run_r(r_code)
+        assert proc.returncode == 0
+        assert "BUG_CONFIRMED" in proc.stdout, \
+            f"Expected silent NA not reproduced:\n{proc.stdout}"
+
+    def test_as_character_fixes_row_lookup(self):
+        """Post-fix: as.character(treat_s) selects rows by name → correct values."""
+        r_code = textwrap.dedent("""
+            norm_counts <- matrix(c(10.0, 20.0, 30.0, 40.0), nrow=2,
+                                  dimnames=list(c("1881793","1881794"),
+                                                c("geneA","geneB")))
+            coldata <- data.frame(
+                sample_id = c(1881793L, 1881794L),
+                condition = c("treatment","control"),
+                stringsAsFactors = FALSE
+            )
+            p <- list(treatment="treatment", control="control")
+            # Post-fix form:
+            treat_s <- as.character(coldata$sample_id[coldata$condition == p$treatment])
+            ctrl_s  <- as.character(coldata$sample_id[coldata$condition == p$control])
+            stopifnot(is.character(treat_s), length(treat_s) == 1)
+            val <- norm_counts[treat_s, "geneA", drop=TRUE]
+            # Must be real value (10.0), not NA
+            stopifnot(!is.na(val), val == 10.0)
+            cat("PASS: as.character() fixes silent row OOB in M14 biotype-wilcox\\n")
+        """)
+        proc = self._run_r(r_code)
+        assert proc.returncode == 0, \
+            f"R crashed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+        assert "PASS" in proc.stdout
+
+    def test_column_vs_row_oob_behaviour_documented(self):
+        """
+        Document R OOB behaviour: column OOB crashes, row OOB returns NA silently.
+        This asymmetry explains why M14 step 58/281 crashed but step 24/281 did not.
+        """
+        r_code = textwrap.dedent("""
+            m <- matrix(1:4, nrow=2, dimnames=list(c("r1","r2"), c("c1","c2")))
+            # Row OOB: silent NA
+            row_result <- tryCatch(m[999L, "c1", drop=TRUE],
+                                   error=function(e) "ERROR")
+            stopifnot(is.na(row_result))  # NA, not error
+            # Column OOB: error
+            col_result <- tryCatch(m["r1", 999L, drop=TRUE],
+                                   error=function(e) paste("ERROR:", e$message))
+            stopifnot(grepl("ERROR", col_result))
+            cat("DOCUMENTED: row OOB → NA (silent), column OOB → error\\n")
+        """)
+        proc = self._run_r(r_code)
+        assert proc.returncode == 0
+        assert "DOCUMENTED" in proc.stdout
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# B1 extension — M20: column OOB crash in m20_metatranscriptomics.R
+# sample_cols used as column subscript in abund_wide[, sample_cols, drop=FALSE]
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestB1_M20_SampleCols:
+    """
+    m20_metatranscriptomics.R line 138: sample_cols used to subset abund_wide.
+    Without as.character(), integer IDs → OOB crash.
+    Same column OOB pattern as M16.
+    """
+
+    def _run_r(self, code: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["conda", "run", "-n", "mosaic", "Rscript", "--vanilla", "-e", code],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    def test_as_character_fixes_m20_column_lookup(self):
+        """Post-fix: as.character(sample_cols) selects columns by name in abund_wide."""
+        r_code = textwrap.dedent("""
+            abund_wide <- data.frame(
+                name = c("Bacteroides","Prevotella"),
+                "1881793" = c(100L, 50L),
+                "1881794" = c(80L, 20L),
+                check.names = FALSE,
+                stringsAsFactors = FALSE
+            )
+            coldata <- data.frame(
+                sample_id = c(1881793L, 1881794L),
+                condition = c("treatment","control"),
+                stringsAsFactors = FALSE
+            )
+            # Post-fix form:
+            sample_cols <- as.character(coldata$sample_id[
+                coldata$sample_id %in% colnames(abund_wide)
+            ])
+            stopifnot(is.character(sample_cols), length(sample_cols) == 2)
+            sub <- abund_wide[, sample_cols, drop=FALSE]
+            stopifnot(ncol(sub) == 2)
+            cat("PASS: as.character() fixes column OOB in M20\\n")
+        """)
+        proc = self._run_r(r_code)
+        assert proc.returncode == 0, \
+            f"R crashed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+        assert "PASS" in proc.stdout
+
+    def test_integer_sample_cols_crash_in_m20(self):
+        """Pre-fix: integer sample_cols used as column subscript → OOB crash."""
+        r_code = textwrap.dedent("""
+            abund_wide <- data.frame(
+                name = c("Bacteroides","Prevotella"),
+                "1881793" = c(100L, 50L),
+                "1881794" = c(80L, 20L),
+                check.names = FALSE,
+                stringsAsFactors = FALSE
+            )
+            coldata <- data.frame(
+                sample_id = c(1881793L, 1881794L),
+                condition = c("treatment","control"),
+                stringsAsFactors = FALSE
+            )
+            # Pre-fix: integer remains integer after %in%
+            sample_cols_buggy <- coldata$sample_id[
+                coldata$sample_id %in% colnames(abund_wide)
+            ]
+            stopifnot(is.integer(sample_cols_buggy))
+            result <- tryCatch(
+                abund_wide[, sample_cols_buggy, drop=FALSE],
+                error = function(e) e$message
+            )
+            if (is.character(result) && nchar(result) > 0) {
+                cat("BUG_CONFIRMED: integer sample_cols OOB in M20:", result, "\\n")
+            } else {
+                stop("Expected OOB error not raised")
+            }
+        """)
+        proc = self._run_r(r_code)
+        assert proc.returncode == 0
+        assert "BUG_CONFIRMED" in proc.stdout, \
+            f"Pre-fix crash not reproducible:\n{proc.stdout}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# B1 non-regression — M12: intersect() returns character, no fix needed
+# intersect(integer, character) coerces result to character via c(x[...], y[0L])
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestB1_M12_IntersectSafe:
+    """
+    m12_deseq2.R: sids <- intersect(coldata$sample_id, samp_clean)
+    samp_clean is character ("1881793"...), coldata$sample_id is integer.
+    R's intersect() implementation: c(x[match(x,y,0L)>0L], y[0L])
+    The appended y[0L]=character(0) forces type coercion → result is character.
+    Therefore m12 does NOT need as.character() and must NOT be changed.
+    Lucibello m12 completed 4/4 comparisons with numeric IDs, confirming safety.
+    """
+
+    def _run_r(self, code: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["conda", "run", "-n", "mosaic", "Rscript", "--vanilla", "-e", code],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    def test_intersect_integer_character_returns_character(self):
+        """
+        intersect(integer_vec, character_vec) must return character.
+        This is the safety guarantee that makes m12 correct without as.character().
+        """
+        r_code = textwrap.dedent("""
+            int_ids  <- c(1881793L, 1881794L, 1881795L)
+            chr_ids  <- c("1881793", "1881794")
+            result   <- intersect(int_ids, chr_ids)
+            stopifnot(is.character(result))
+            stopifnot(length(result) == 2)
+            stopifnot(setequal(result, c("1881793","1881794")))
+            cat("PASS: intersect(integer, character) returns character — m12 safe\\n")
+        """)
+        proc = self._run_r(r_code)
+        assert proc.returncode == 0, \
+            f"R crashed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+        assert "PASS" in proc.stdout
+
+    def test_intersect_result_safe_as_column_subscript(self):
+        """
+        The character result of intersect() can be used safely as column subscript.
+        """
+        r_code = textwrap.dedent("""
+            mat <- matrix(1:6, nrow=3,
+                          dimnames=list(NULL, c("1881793","1881794","1881795")))
+            int_ids <- c(1881793L, 1881794L)
+            chr_names <- c("1881793","1881794","1881795")
+            sids <- intersect(int_ids, chr_names)
+            stopifnot(is.character(sids))
+            sub <- mat[, sids, drop=FALSE]
+            stopifnot(ncol(sub) == 2)
+            cat("PASS: intersect result used as column name subscript — no OOB\\n")
+        """)
+        proc = self._run_r(r_code)
+        assert proc.returncode == 0, \
+            f"R crashed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+        assert "PASS" in proc.stdout
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -262,6 +561,10 @@ if __name__ == "__main__":
         TestB3_StringTie,
         TestCrossModuleInvariant,
         TestB1_NumericSampleID,
+        TestB1_M14_SatWilcox,
+        TestB1_M14_BiotypeWilcox,
+        TestB1_M20_SampleCols,
+        TestB1_M12_IntersectSafe,
     ]
     passed = failed = 0
     for cls in classes:

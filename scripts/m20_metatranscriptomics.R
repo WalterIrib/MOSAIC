@@ -135,7 +135,7 @@ abund_wide <- abund_long |>
               values_fill=0)
 
 # Filter: taxon must appear in min-samples
-sample_cols <- coldata$sample_id[coldata$sample_id %in% colnames(abund_wide)]
+sample_cols <- as.character(coldata$sample_id[coldata$sample_id %in% colnames(abund_wide)])
 n_present   <- rowSums(abund_wide[, sample_cols, drop=FALSE] > 0)
 abund_wide  <- abund_wide[n_present >= opt[["min-samples"]], ]
 
