@@ -319,16 +319,24 @@ class TestB1_M14_SatWilcox:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# B1 extension — M14 biotype-wilcox: row OOB silent failure
-# treat_s used as row subscript in norm_counts[treat_s, gene, drop=TRUE]
-# Row OOB with integer → NA (no crash), silently corrupts Wilcoxon results.
+# B1 extension — M14 biotype-wilcox: row OOB SILENT failure (data.frame)
+# pct_df is a data.frame (sapply(...)|>as.data.frame()), NOT a matrix.
+# data.frame[large_int_OOB, col] → NA silently; matrix same → error.
+# treat_s used as row subscript at line 850: pct_df[treat_s, cat, drop=TRUE]
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestB1_M14_BiotypeWilcox:
     """
-    M14 biotype-wilcox chunk: treat_s used as row subscript in norm_counts.
-    Integer IDs used as row positions (out of bounds) → NA silently.
-    No crash at step 24/281, but all Wilcoxon p-values become NA (wrong output).
+    M14 biotype-wilcox chunk: treat_s used as row subscript in pct_df.
+    pct_df is a data.frame (sapply(...)|>as.data.frame()), NOT a matrix.
+    Key distinction (verified empirically on R 4.5.1):
+      data.frame[large_int_OOB, col] → NA silently (no error)
+      matrix[large_int_OOB, col]     → "subscript out of bounds" error
+    So integer treat_s on pct_df silently returns NA → as.numeric(NA) →
+    wilcox.test(NA, NA) → error caught by tryCatch at line 852 → pval=NA.
+    Entire wilcox_bt table comes out all-NA.  No crash at step 24/281.
+    Crash at step 58/281 (sat-wilcox) where sat_counts is accessed as
+    a matrix with no tryCatch guard.
     Fix: as.character(treat_s) → name-based row lookup → correct values.
     """
 
@@ -338,79 +346,81 @@ class TestB1_M14_BiotypeWilcox:
             capture_output=True, text=True, timeout=30,
         )
 
-    def test_row_oob_crashes_with_integer_sids(self):
+    def test_row_oob_returns_na_silently_on_dataframe(self):
         """
-        Pre-fix: integer treat_s used as positional row index on a matrix.
-        Large IDs like 1881793 are way out of bounds → subscript OOB crash.
-        Same crash class as column OOB (both crash with large integers).
-        The biotype-wilcox chunk may have tryCatch wrapping, explaining why
-        the render continued past step 24 and failed at step 58 instead.
+        Pre-fix: integer treat_s used as positional row subscript on a data.frame.
+        data.frame[c(1881793L, 1881794L), col] → c(NA, NA) with no error.
+        This is the SILENT wrong-output scenario: no crash, all-NA Wilcoxon table.
+        Contrast with matrix: same access raises "subscript out of bounds".
         """
         r_code = textwrap.dedent("""
-            norm_counts <- matrix(c(10.0, 20.0, 30.0, 40.0), nrow=2,
-                                  dimnames=list(c("1881793","1881794"),
-                                                c("geneA","geneB")))
-            # Pre-fix: treat_s is integer — used as positional row index
-            treat_s_buggy <- c(1881793L, 1881794L)
-            result <- tryCatch(
-                norm_counts[treat_s_buggy, "geneA", drop=TRUE],
-                error = function(e) e$message
+            # pct_df in biotype-wilcox is a data.frame with sample IDs as rownames
+            pct_df <- data.frame(
+                protein_coding = c(75.1, 74.3, 76.2, 73.8),
+                lncRNA         = c(12.3, 11.9, 12.7, 11.5),
+                row.names      = c("1881793","1881794","1881795","1881796"),
+                stringsAsFactors = FALSE
             )
-            if (is.character(result) && nchar(result) > 0) {
-                cat("BUG_CONFIRMED: row OOB with large integer crashes:", result, "\\n")
-            } else {
-                stop("Expected OOB error not raised")
-            }
+            # Pre-fix: treat_s is integer — positional row access, way OOB
+            treat_s_buggy <- c(1881793L, 1881794L)
+            result <- pct_df[treat_s_buggy, "protein_coding", drop=TRUE]
+            # Must be NA, not an error
+            stopifnot(all(is.na(result)))
+            stopifnot(length(result) == 2)
+            cat("BUG_CONFIRMED: data.frame row OOB returns NA silently\\n")
         """)
         proc = self._run_r(r_code)
-        assert proc.returncode == 0
+        assert proc.returncode == 0, \
+            f"R crashed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
         assert "BUG_CONFIRMED" in proc.stdout, \
-            f"Pre-fix crash not reproducible:\n{proc.stdout}"
+            f"Expected silent NA not reproduced:\n{proc.stdout}"
 
-    def test_as_character_fixes_row_lookup(self):
+    def test_as_character_fixes_row_lookup_on_dataframe(self):
         """Post-fix: as.character(treat_s) selects rows by name → correct values."""
         r_code = textwrap.dedent("""
-            norm_counts <- matrix(c(10.0, 20.0, 30.0, 40.0), nrow=2,
-                                  dimnames=list(c("1881793","1881794"),
-                                                c("geneA","geneB")))
+            pct_df <- data.frame(
+                protein_coding = c(75.1, 74.3, 76.2, 73.8),
+                lncRNA         = c(12.3, 11.9, 12.7, 11.5),
+                row.names      = c("1881793","1881794","1881795","1881796"),
+                stringsAsFactors = FALSE
+            )
             coldata <- data.frame(
-                sample_id = c(1881793L, 1881794L),
-                condition = c("treatment","control"),
+                sample_id = c(1881793L, 1881794L, 1881795L, 1881796L),
+                condition = c("treatment","treatment","control","control"),
                 stringsAsFactors = FALSE
             )
             p <- list(treatment="treatment", control="control")
             # Post-fix form:
             treat_s <- as.character(coldata$sample_id[coldata$condition == p$treatment])
             ctrl_s  <- as.character(coldata$sample_id[coldata$condition == p$control])
-            stopifnot(is.character(treat_s), length(treat_s) == 1)
-            val <- norm_counts[treat_s, "geneA", drop=TRUE]
-            # Must be real value (10.0), not NA
-            stopifnot(!is.na(val), val == 10.0)
-            cat("PASS: as.character() fixes silent row OOB in M14 biotype-wilcox\\n")
+            stopifnot(is.character(treat_s), length(treat_s) == 2)
+            x <- as.numeric(pct_df[treat_s, "protein_coding", drop=TRUE])
+            stopifnot(!any(is.na(x)))
+            stopifnot(all.equal(x, c(75.1, 74.3)))
+            cat("PASS: as.character() fixes silent NA in M14 biotype-wilcox data.frame\\n")
         """)
         proc = self._run_r(r_code)
         assert proc.returncode == 0, \
             f"R crashed:\nSTDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
         assert "PASS" in proc.stdout
 
-    def test_both_row_and_column_oob_crash_with_large_integers(self):
+    def test_dataframe_vs_matrix_row_oob_documented(self):
         """
-        Both row OOB and column OOB crash when the integer index is far out of bounds.
-        This is the same crash class.  The biotype-wilcox chunk (step 24/281) likely
-        has a tryCatch wrapping the wilcox.test call that swallows the error,
-        which is why the render continued and crashed later at step 58/281.
+        Document data.frame vs matrix OOB asymmetry (verified on R 4.5.1).
+        Explains why biotype-wilcox (data.frame, step 24/281) gave silent wrong
+        output while sat-wilcox (matrix subscript, step 58/281) crashed hard.
         """
         r_code = textwrap.dedent("""
-            m <- matrix(1:4, nrow=2, dimnames=list(c("r1","r2"), c("c1","c2")))
-            # Row OOB with large integer: also crashes
-            row_result <- tryCatch(m[999L, "c1", drop=TRUE],
+            df  <- data.frame(a=c(10.0,20.0), row.names=c("r1","r2"))
+            mat <- matrix(c(10.0,20.0), nrow=2, dimnames=list(c("r1","r2"), "a"))
+            # data.frame: row OOB → NA silently
+            df_result <- df[999L, "a", drop=TRUE]
+            stopifnot(is.na(df_result))
+            # matrix: row OOB → error
+            mat_result <- tryCatch(mat[999L, "a", drop=TRUE],
                                    error=function(e) paste("ERROR:", e$message))
-            stopifnot(grepl("ERROR", row_result))
-            # Column OOB with large integer: crashes
-            col_result <- tryCatch(m["r1", 999L, drop=TRUE],
-                                   error=function(e) paste("ERROR:", e$message))
-            stopifnot(grepl("ERROR", col_result))
-            cat("DOCUMENTED: both row and column OOB crash with large integers\\n")
+            stopifnot(grepl("ERROR", mat_result))
+            cat("DOCUMENTED: data.frame row OOB → NA (silent); matrix row OOB → error\\n")
         """)
         proc = self._run_r(r_code)
         assert proc.returncode == 0
