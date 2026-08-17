@@ -62,10 +62,12 @@ class TestB2_FeatureCounts:
     def test_unstranded_yields_0(self):
         assert self.fn("unstranded", "PE") == "0"
 
-    def test_undetermined_yields_0(self):
-        # undetermined falls back via the .get(strand, "0") in detect_strandedness_full
-        # The helper itself receives the resolved label; unstranded is the safe default
-        assert self.fn("unstranded", "PE") == "0"
+    def test_undetermined_raises(self):
+        # "undetermined" must not silently fall through to -s 0 or -s 2.
+        # The function now validates via _validate_strand_label → RuntimeError.
+        import pytest
+        with pytest.raises(RuntimeError, match="non riconosciuta"):
+            self.fn("undetermined", "PE")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -125,14 +127,14 @@ class TestCrossModuleInvariant:
     RF → featureCounts -s 1 / StringTie --fr / rMATS fr-secondstrand.
     """
 
-    RMATS_MAP = {"FR": "fr-firststrand", "RF": "fr-secondstrand"}
-
     def test_fr_rmats_agrees(self):
-        assert self.RMATS_MAP["FR"] == "fr-firststrand", \
+        mod = _import_helpers()
+        assert mod._strand_to_rmats_libtype("FR") == "fr-firststrand", \
             "FR (dUTP) must map to rMATS fr-firststrand"
 
     def test_rf_rmats_agrees(self):
-        assert self.RMATS_MAP["RF"] == "fr-secondstrand"
+        mod = _import_helpers()
+        assert mod._strand_to_rmats_libtype("RF") == "fr-secondstrand"
 
     def test_full_cross_module_table(self):
         """
@@ -147,7 +149,7 @@ class TestCrossModuleInvariant:
             fc   = mod.strandedness_to_featurecounts(label, "PE")
             st   = (["--rf"] if label == "FR" else
                     ["--fr"] if label == "RF" else [])
-            rmts = self.RMATS_MAP.get(label, "fr-unstranded")
+            rmts = mod._strand_to_rmats_libtype(label)
 
             assert fc   == expected_fc,   f"{label}: featureCounts {fc!r} ≠ {expected_fc!r}"
             assert st   == expected_st,   f"{label}: StringTie {st!r} ≠ {expected_st!r}"
@@ -572,6 +574,166 @@ class TestB1_M12_IntersectSafe:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Strandedness resolution: _validate_strand_label, _strand_to_rmats_libtype,
+# _get_consensus_strandedness — regression for the resumed-run / auto bug.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestStrandednessResolution:
+    """
+    AI1: _validate_strand_label rejects unknown labels from ALL code paths.
+    AI2: non-unanimous consensus is logged and raises on weak majority.
+    AI3: M17 must derive libType from _get_consensus_strandedness(), not
+         _strandedness_config. Verified both via source check and unit integration.
+
+    Root cause of the fixed bug: with strandedness: auto in config and m07
+    state=done (resumed run), _strandedness_config="auto" fell through two
+    guards to return "unstranded" → featureCounts -s 0, rMATS fr-unstranded.
+    Fix: read strandedness.tsv written by m07 before any fallback;
+         raise instead of defaulting silently.
+    """
+
+    def setup_method(self):
+        self.mod = _import_helpers()
+
+    # ── AI1: validation helper ────────────────────────────────────────────────
+
+    def test_validate_raises_on_undetermined(self):
+        with pytest.raises(RuntimeError, match="non riconosciuta"):
+            self.mod._validate_strand_label("undetermined", "test")
+
+    def test_validate_raises_on_auto(self):
+        with pytest.raises(RuntimeError, match="non riconosciuta"):
+            self.mod._validate_strand_label("auto", "test")
+
+    def test_validate_passes_on_valid_labels(self):
+        for label in ("FR", "RF", "unstranded"):
+            assert self.mod._validate_strand_label(label, "test") == label
+
+    # ── _strand_to_rmats_libtype unit tests ──────────────────────────────────
+
+    def test_strand_to_rmats_fr(self):
+        assert self.mod._strand_to_rmats_libtype("FR") == "fr-firststrand"
+
+    def test_strand_to_rmats_rf(self):
+        assert self.mod._strand_to_rmats_libtype("RF") == "fr-secondstrand"
+
+    def test_strand_to_rmats_unstranded(self):
+        assert self.mod._strand_to_rmats_libtype("unstranded") == "fr-unstranded"
+
+    def test_strand_to_rmats_raises_undetermined(self):
+        with pytest.raises(RuntimeError, match="non riconosciuta"):
+            self.mod._strand_to_rmats_libtype("undetermined")
+
+    def test_strand_to_rmats_raises_auto(self):
+        with pytest.raises(RuntimeError, match="non riconosciuta"):
+            self.mod._strand_to_rmats_libtype("auto")
+
+    # ── AI2: non-unanimous consensus ─────────────────────────────────────────
+
+    def _make_runner(self, cfg, tmp_path):
+        """Return a SimpleNamespace with ModuleRunner methods properly bound."""
+        import types as _t
+        runner = _t.SimpleNamespace(cfg=cfg, out=tmp_path)
+        runner._consensus_from_map = _t.MethodType(
+            self.mod.ModuleRunner._consensus_from_map, runner)
+        runner._get_consensus_strandedness = _t.MethodType(
+            self.mod.ModuleRunner._get_consensus_strandedness, runner)
+        return runner
+
+    def test_consensus_warns_on_non_unanimous(self, tmp_path, caplog):
+        import logging
+        import types
+        cfg = types.SimpleNamespace(
+            library=types.SimpleNamespace(
+                _strandedness_config="auto", strandedness="auto"
+            ),
+            _strandedness={"S1": "FR", "S2": "FR", "S3": "RF"},  # not unanimous
+        )
+        runner = self._make_runner(cfg, tmp_path)
+        with caplog.at_level(logging.WARNING, logger="mosaic"):
+            result = runner._get_consensus_strandedness()
+        assert result == "FR"
+        assert any("non unanime" in r.message for r in caplog.records), \
+            "Non-unanimous strandedness must log a warning"
+
+    def test_consensus_raises_on_weak_majority(self, tmp_path):
+        import types
+        # 2 FR vs 2 RF: majority 50% < threshold 67%
+        cfg = types.SimpleNamespace(
+            library=types.SimpleNamespace(
+                _strandedness_config="auto", strandedness="auto"
+            ),
+            _strandedness={"S1": "FR", "S2": "FR", "S3": "RF", "S4": "RF"},
+        )
+        runner = self._make_runner(cfg, tmp_path)
+        with pytest.raises(RuntimeError, match="troppo debole"):
+            runner._get_consensus_strandedness()
+
+    # ── AI3 / Fix B: TSV read on resumed run ─────────────────────────────────
+
+    def test_consensus_reads_tsv_when_m07_skipped(self, tmp_path):
+        """
+        Core regression test: TSV=FR, config=auto, cfg._strandedness={} (m07 skipped).
+        Pre-fix: returns "unstranded" → featureCounts -s 0, rMATS fr-unstranded.
+        Post-fix: reads strandedness.tsv → returns "FR".
+        """
+        import types
+        tsv = tmp_path / "mapping" / "strandedness.tsv"
+        tsv.parent.mkdir()
+        tsv.write_text("sample_id\tstrandedness\nS1\tFR\nS2\tFR\n")
+
+        cfg = types.SimpleNamespace(
+            library=types.SimpleNamespace(
+                _strandedness_config="auto", strandedness="auto"
+            ),
+            _strandedness={},  # m07 skipped → empty
+        )
+        runner = self._make_runner(cfg, tmp_path)
+        result = runner._get_consensus_strandedness()
+        assert result == "FR", \
+            f"With TSV=FR and m07 skipped, must return 'FR', got '{result}'"
+
+        # The downstream M17 translation must give fr-firststrand, not fr-unstranded
+        libtype = self.mod._strand_to_rmats_libtype(result)
+        assert libtype == "fr-firststrand", \
+            f"FR must map to fr-firststrand for rMATS, got '{libtype}'"
+
+    def test_consensus_raises_without_tsv_and_no_map(self, tmp_path):
+        """No TSV, no cfg._strandedness, config=auto → must raise, not return 'unstranded'."""
+        import types
+        cfg = types.SimpleNamespace(
+            library=types.SimpleNamespace(
+                _strandedness_config="auto", strandedness="auto"
+            ),
+            _strandedness={},
+        )
+        runner = self._make_runner(cfg, tmp_path)
+        with pytest.raises(RuntimeError, match="strandedness non risolta"):
+            runner._get_consensus_strandedness()
+
+    # ── AI3: M17 source-level regression check ───────────────────────────────
+
+    def test_m17_delegates_to_strand_to_rmats_libtype(self):
+        """
+        M17 must call _strand_to_rmats_libtype() — not compute libType inline
+        from _strandedness_config. Verified via source inspection.
+        Pre-fix: _strandedness_config="auto" → .get("auto","fr-unstranded")
+                 = "fr-unstranded" for ALL comparisons, silently wrong.
+        Post-fix: _strand_to_rmats_libtype(_get_consensus_strandedness())
+                  raises on any unresolved label.
+        """
+        src = (REPO / "mosaic" / "pipeline.py").read_text()
+        m17_start = src.find("def _run_m17_rmats")
+        m17_end   = src.find("\n    def ", m17_start + 1)
+        m17_body  = src[m17_start:m17_end]
+
+        assert "_strand_to_rmats_libtype" in m17_body, \
+            "M17 must call _strand_to_rmats_libtype() — direct computation is the pre-fix bug"
+        assert "_strandedness_config" not in m17_body, \
+            "M17 must not read _strandedness_config directly — this was the pre-fix bug"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -580,6 +742,7 @@ if __name__ == "__main__":
         TestB2_FeatureCounts,
         TestB3_StringTie,
         TestCrossModuleInvariant,
+        TestStrandednessResolution,
         TestB1_NumericSampleID,
         TestB1_M14_SatWilcox,
         TestB1_M14_BiotypeWilcox,

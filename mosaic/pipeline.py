@@ -526,12 +526,8 @@ def strandedness_to_featurecounts(strand: str, layout: str) -> str:
     RF = "1++,1--,2+-,2-+" = R1 same as gene = fr-secondstrand = -s 1
     FR = "1+-,1-+,2++,2--" = R2 same as gene = fr-firststrand/dUTP/TruSeq = -s 2
     """
-    if strand == "unstranded":
-        return "0"
-    elif strand == "RF":
-        return "1"  # R1 on sense strand (fr-secondstrand)
-    else:  # FR
-        return "2"  # R2 on sense strand (fr-firststrand / dUTP)
+    _validate_strand_label(strand, "strandedness_to_featurecounts")
+    return {"unstranded": "0", "RF": "1", "FR": "2"}[strand]
 
 
 def strandedness_to_star(strand: str) -> List[str]:
@@ -546,6 +542,42 @@ def strandedness_to_rmats(strand: str, layout: str) -> List[str]:
     """Return rMATS -t flag."""
     t = "paired" if layout == "PE" else "single"
     return ["-t", t]
+
+
+# Valid resolved strandedness labels. "undetermined" and "auto" must never
+# reach downstream tools — both must be caught and raised before this point.
+_STRAND_VALID: frozenset = frozenset({"FR", "RF", "unstranded"})
+
+# Majority threshold: if the winning label covers less than this fraction of
+# samples, raise rather than silently proceed with a weak consensus.
+_STRAND_CONSENSUS_THRESHOLD: float = 2 / 3
+
+
+def _validate_strand_label(label: str, source: str) -> str:
+    """Raise RuntimeError if label is not a recognised strandedness value."""
+    if label not in _STRAND_VALID:
+        raise RuntimeError(
+            f"strandedness non riconosciuta (fonte: {source}): '{label}'. "
+            f"Valori validi: {sorted(_STRAND_VALID)}. "
+            f"Se il campione e' 'undetermined', imposta strandedness esplicita "
+            f"nel config (FR/RF/unstranded) o controlla la qualità dei BAM."
+        )
+    return label
+
+
+def _strand_to_rmats_libtype(strand: str) -> str:
+    """Map resolved strandedness label to rMATS --libType string.
+
+    Raises RuntimeError on any unrecognised label so that unresolved
+    strandedness never silently falls through to fr-unstranded.
+    """
+    _map = {
+        "FR":         "fr-firststrand",   # dUTP/TruSeq: R2 on sense strand
+        "RF":         "fr-secondstrand",  # forward-stranded: R1 on sense strand
+        "unstranded": "fr-unstranded",
+    }
+    _validate_strand_label(strand, "_strand_to_rmats_libtype")
+    return _map[strand]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1183,14 +1215,7 @@ class ModuleRunner:
         if use_statoff:
             warn(f"< 3 replicates per condition — running rMATS with --statoff")
 
-        # Map MOSAIC strandedness to rMATS --libType
-        # FR = dUTP/TruSeq Stranded (R2 same strand as gene) = fr-firststrand
-        # RF = forward-stranded (R1 same strand as gene)     = fr-secondstrand
-        _strand_cfg = getattr(cfg.library, "_strandedness_config", "unstranded")
-        _rmats_libtype = {
-            "FR": "fr-firststrand",
-            "RF": "fr-secondstrand",
-        }.get(_strand_cfg, "fr-unstranded")
+        _rmats_libtype = _strand_to_rmats_libtype(self._get_consensus_strandedness())
 
         cmd = [
             "rmats.py",
@@ -1441,10 +1466,6 @@ class ModuleRunner:
         bam_dir = self.out / "mapping" / "bam"
         out_dir = self.out / "m12"
         out_dir.mkdir(parents=True, exist_ok=True)
-        strand  = self._get_consensus_strandedness()
-        stranded = "no" if strand == "unstranded" else (
-            "reverse" if strand == "RF" else "yes")
-
         # Use the processed 6-col BED (m11/rmsk_hg38.bed), NOT the raw UCSC gz
         rmsk_hg38_bed = self.out / "m11" / "rmsk_hg38.bed"
         if not rmsk_hg38_bed.exists():
@@ -2141,20 +2162,77 @@ class ModuleRunner:
                 for sid in sids]
 
     def _get_consensus_strandedness(self) -> str:
-        # If config has an explicit value (not "auto"), it always wins
+        """Return the resolved strandedness label for the current run.
+
+        Priority:
+          1. Explicit value in config (strandedness != "auto") — validated.
+          2. In-memory auto-detection result from m07 (cfg._strandedness) —
+             validated, with warning if samples disagree.
+          3. TSV on disk (mapping/strandedness.tsv) written by m07 — lets a
+             resumed run (m07 state=done) find the resolved value without
+             re-running detection. Same validation and warning logic as (2).
+          4. Raises RuntimeError — no silent fallback to "unstranded".
+        """
+        # ── 1. Explicit config value ──────────────────────────────────────────
         cfg_strand = (getattr(self.cfg.library, "_strandedness_config", None) or
                       getattr(self.cfg.library, "strandedness", None) or "")
         if cfg_strand and cfg_strand != "auto":
-            return cfg_strand
+            return _validate_strand_label(cfg_strand, "config (strandedness field)")
 
-        # Otherwise use auto-detection result from m07
+        # ── 2. In-memory auto-detection map (set by m07 when it runs) ─────────
         strand_map = getattr(self.cfg, "_strandedness", {})
         if strand_map:
-            from collections import Counter
-            return Counter(strand_map.values()).most_common(1)[0][0]
+            return self._consensus_from_map(strand_map, source="cfg._strandedness (m07)")
 
-        # Final fallback: unstranded (safe default)
-        return "unstranded"
+        # ── 3. TSV on disk written by m07 — survives run resume ───────────────
+        import csv as _csv
+        _tsv = self.out / "mapping" / "strandedness.tsv"
+        if _tsv.exists():
+            _map: dict = {}
+            with open(_tsv) as _fh:
+                for _row in _csv.DictReader(_fh, delimiter="\t"):
+                    _sid = _row.get("sample_id", "").strip()
+                    _st  = _row.get("strandedness", "").strip()
+                    if _sid and _st:
+                        _map[_sid] = _st
+            if _map:
+                return self._consensus_from_map(_map, source=f"strandedness.tsv ({_tsv})")
+
+        # ── 4. No resolution possible ─────────────────────────────────────────
+        raise RuntimeError(
+            "_get_consensus_strandedness: strandedness non risolta. "
+            "strandedness.tsv non trovato e m07 non e' mai girato (o cfg._strandedness "
+            "e' vuoto). Imposta strandedness esplicita nel config "
+            "(FR / RF / unstranded) oppure includi m07 nel run."
+        )
+
+    def _consensus_from_map(self, strand_map: dict, source: str) -> str:
+        """Return majority strandedness from a {sample_id: label} map.
+
+        Logs a warning with per-sample breakdown if samples disagree.
+        Raises RuntimeError if the majority is below _STRAND_CONSENSUS_THRESHOLD
+        or if the winning label is not in _STRAND_VALID.
+        """
+        from collections import Counter
+        counts = Counter(strand_map.values())
+        label, n_top = counts.most_common(1)[0]
+        n_total = sum(counts.values())
+
+        if len(counts) > 1:
+            breakdown = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+            warn(
+                f"strandedness non unanime ({source}): [{breakdown}] "
+                f"su {n_total} campioni — uso '{label}' ({n_top}/{n_total})."
+            )
+            if n_top / n_total < _STRAND_CONSENSUS_THRESHOLD:
+                raise RuntimeError(
+                    f"_consensus_from_map: maggioranza '{label}' troppo debole "
+                    f"({n_top}/{n_total} = {n_top/n_total:.0%} < "
+                    f"{_STRAND_CONSENSUS_THRESHOLD:.0%}). "
+                    f"Imposta strandedness esplicita nel config."
+                )
+
+        return _validate_strand_label(label, source)
 
     def _write_coldata(self, comparison: str) -> Path:
         """Write coldata TSV for a specific comparison."""
