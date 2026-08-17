@@ -186,7 +186,7 @@ def cmd_run(config_file: str, modules: Optional[str],
 
     # Provenance: re-init logging with log_dir so this appears in session.log
     import datetime as _dt
-    _log_dir = Path(cfg.wd) / "mosaic_output" / "logs"
+    _log_dir = Path(cfg.project.wd) / "mosaic_output" / "logs"
     setup_logging(log_dir=_log_dir)
     info(f"[PROVENANCE] {_dt.datetime.now().isoformat()} "
          f"mosaic.__file__={Path(__file__).resolve()} "
