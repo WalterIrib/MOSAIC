@@ -184,6 +184,14 @@ def cmd_run(config_file: str, modules: Optional[str],
     from .pipeline import Pipeline
     scripts_dir = Path(__file__).parent.parent / "scripts"
 
+    # Provenance: re-init logging with log_dir so this appears in session.log
+    import datetime as _dt
+    _log_dir = Path(cfg.wd) / "mosaic_output" / "logs"
+    setup_logging(log_dir=_log_dir)
+    info(f"[PROVENANCE] {_dt.datetime.now().isoformat()} "
+         f"mosaic.__file__={Path(__file__).resolve()} "
+         f"scripts_dir={scripts_dir.resolve()}")
+
     pipeline = Pipeline(
         cfg=cfg,
         scripts_dir=scripts_dir,

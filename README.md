@@ -80,6 +80,15 @@ Binary/script tools set via `config.yaml`: Arriba 2.4.0 (M15), CIRI2 2.0.6 (M06)
   the env is unavailable, the pipeline logs a warning and continues; all other
   modules are unaffected.
 
+- **`scripts/b1_sync_dcc.sh` contains hardcoded paths to the METACAR and
+  DECECCA2019 canonical directories** (`/home/walter/Desktop/METACAR/mosaic_output`,
+  `/home/walter/Desktop/DECECCA2019/mosaic_output`). The script is a one-off
+  utility for syncing DCC circRNA results back to canonical trees after an
+  external rerun; it is **not invoked by the pipeline runner** and is not called
+  from any module. The canonical directories are `chmod a-w`, so an accidental
+  invocation would fail harmlessly. Noted here so future maintainers are not
+  surprised by the grep output.
+
 ---
 
 ## Configuration — a single YAML
