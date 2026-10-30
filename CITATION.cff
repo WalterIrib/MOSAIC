@@ -2,9 +2,8 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata below."
 type: software
 title: "MOSAIC — Multi-Omic Sequencing Analysis and Integrated Characterization"
-version: 1.0.0
-date-released: "2026-04-29"
-doi: "10.1016/j.ygeno.2026.XXXXXX"
+version: 1.1.7
+date-released: "2026-08-17"
 url: "https://github.com/WalterIrib/MOSAIC"
 repository-code: "https://github.com/WalterIrib/MOSAIC"
 license: MIT
@@ -29,13 +28,11 @@ authors:
       Institute of Biomedical Research and Innovation (IRIB),
       National Research Council (CNR), Palermo, Italy
     email: walter.arancio@irib.cnr.it
-    orcid: "https://orcid.org/0000-0000-0000-0000"
 preferred-citation:
   type: article
-  title: >
-    MOSAIC: an automated platform for unbiased multi-omic RNA-seq analysis
-    reveals mitotic regulation of splicing, transposable elements, and RNA
-    editing in chromatin-associated RNA
+  title: >-
+    MOSAIC: an automated RNA-seq platform integrating transposable element,
+    RNA editing and splicing dynamics across cellular senescence and mitosis
   authors:
     - family-names: Sciaraffa
       given-names: Nicolina
@@ -45,11 +42,10 @@ preferred-citation:
       given-names: Francesca
     - family-names: Cusimano
       given-names: Antonella
-    - family-names: Deidda
-      given-names: Irene
     - family-names: Arancio
       given-names: Walter
-  journal: "Genomics"
+  journal: "Methods"
   publisher: "Elsevier"
   year: 2026
-  doi: "10.1016/j.ygeno.2026.XXXXXX"
+  status: submitted
+  notes: "Submitted, under review."
