@@ -1,6 +1,6 @@
 # MOSAIC main conda environment ("mosaic").
 # All versions below were verified from the live environment used to produce the
-# manuscript results (see versions.txt / Supplementary Table S5).
+# manuscript results (see versions.txt / Supplementary Table S10).
 #
 #   conda env create -f environment.yml
 #   conda activate mosaic

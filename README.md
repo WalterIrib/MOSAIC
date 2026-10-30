@@ -26,7 +26,7 @@ to its tool and to the Results/figures it feeds.
 | M02 | Read trimming & QC (dedup/low-complexity **off** to keep repeat reads) | fastp 1.1.0 | §4.2, §4.3 |
 | M04 | Two-pass genome alignment | STAR 2.7.10b | §4.2; Fig 1 |
 | M05 | TE **&** satellite family quantification (DFAM consensus pseudochromosomes) | bowtie2 2.5.4 | §4.2, §4.5 |
-| M06 | circRNA detection (screening) | CIRI2 2.0.6 | §4.2 |
+| M06 | circRNA detection (screening) | DCC 0.5.0 | §4.2 |
 | M07 | Strandedness inference | RSeQC 5.0.4 | §4.2 |
 | M08 / M08b | Gene DE + factorial interaction; satellite family DE (+ Wilcoxon); QC/biotype | featureCounts 2.1.1 + DESeq2 1.50.2 (ashr) | §4.2, §4.4; Tab 2, Fig 2–3 |
 | M10 | GO / KEGG enrichment | clusterProfiler 4.18.4 | §4.2, §4.4 |
@@ -66,9 +66,9 @@ conda env create -f environment_telescope.yml   # Telescope benchmark only (§4.
 # HUMAnN3 (optional M20b) → conda env "humann3"
 ```
 
-Binary/script tools set via `config.yaml`: Arriba 2.4.0 (M15), CIRI2 2.0.6 (M06).
+Binary/script tools set via `config.yaml`: Arriba 2.4.0 (M15).
 
-### Known limitations (v1.1.0)
+### Known limitations (v1.1)
 
 - **M20b (HUMAnN3 functional profiling) is experimental and not tested in this
   release.** It requires a separate `humann3` conda environment (HUMAnN3 is not
@@ -196,8 +196,9 @@ a few loci above published values (boundary-artefact fix; see CHANGELOG).
 
 ## Citation
 
-> Sciaraffa N, Russo R, Zito F, Cusimano A, Deidda I, Arancio W. *MOSAIC: an automated
-> platform for unbiased multi-omic RNA-seq analysis…* **Genomics** (2026), in press.
+> Sciaraffa N, Russo R, Zito F, Cusimano A, Arancio W. *MOSAIC: an automated RNA-seq
+> platform integrating transposable element, RNA editing and splicing dynamics across
+> cellular senescence and mitosis.* **Methods** (submitted, under review).
 
 A `CITATION.cff` is provided. Source: <https://github.com/WalterIrib/MOSAIC> (MIT).
 
