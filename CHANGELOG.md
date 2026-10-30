@@ -2,6 +2,229 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [1.1.7] — 2026-08-17 — Fix: single-source strandedness resolution; explicit validation
+
+**Tag:** v1.1.7 — commit `63bbe55`
+**Date:** 2026-08-17
+**Supersedes:** v1.1.6 (372ef2f)
+
+### Bugs fixed
+
+#### B4 — `_get_consensus_strandedness()`: silent fallback to "unstranded" on resumed run
+
+**Trigger:** pipeline resumed with `strandedness: auto` in config and m07 state=done
+(skipped). `_strandedness_config = "auto"` failed the `!= "auto"` guard;
+`cfg._strandedness = {}` (never set by m07) failed the falsy guard; function
+fell through to `return "unstranded"`.
+
+**Impact:**
+- **M08 featureCounts**: `-s 0` instead of `-s 2` for the 2 new comparisons
+  (WT_vs_parental, AA_vs_parental) in the Lucibello v1.1.7 rerun.
+- **M16 featureCounts**: would have gotten `-s 0` for all 6 comparisons (file
+  is created once globally; new directory → featurecounts_transcripts.txt did
+  not exist → would re-run with wrong flag).
+- **M17 rMATS**: separate systematic bug — read `_strandedness_config` at
+  parse-time instead of the resolved strandedness. `"auto"` fell through
+  to `"fr-unstranded"` for **all** comparisons, including old ones.
+  (Canonical METACAR/DECECCA2019 runs unaffected: their config declares
+  `strandedness: FR` explicitly, not `auto`.)
+
+#### Fix B — TSV as third resolution path
+
+`_get_consensus_strandedness()` now reads `mapping/strandedness.tsv` (written
+by m07) as a third resolution path, before any final fallback. A resumed run
+finds the correct strandedness without re-running m07. Same approach already
+used by M16 StringTie assembly (pipeline.py:1581-1590 since v1.1.0).
+
+Priority order:
+1. Explicit config value (`strandedness` ≠ `"auto"`) — validated.
+2. In-memory map set by m07 (`cfg._strandedness`) — validated.
+3. TSV on disk (`mapping/strandedness.tsv`) — validated.
+4. `RuntimeError` — no silent fallback to any default.
+
+#### Fix A — Explicit validation via `_validate_strand_label()`
+
+New module-level function `_validate_strand_label(label, source)` raises
+`RuntimeError` on any label not in `{"FR", "RF", "unstranded"}` — covering
+`"undetermined"`, `"auto"`, or any future typo. Called from all three
+resolution paths (config, strand_map, TSV) and from `strandedness_to_featurecounts`.
+
+New module-level `_STRAND_CONSENSUS_THRESHOLD = 2/3`: if the majority label
+covers < 67% of samples, `_consensus_from_map()` raises rather than silently
+proceeding.
+
+Non-unanimous consensus logs a warning with per-sample breakdown (AI2).
+
+#### Fix A (M17 source) — M17 reads resolved strandedness, not parse-time config
+
+`_run_m17_rmats` now calls `_strand_to_rmats_libtype(_get_consensus_strandedness())`
+instead of reading `cfg.library._strandedness_config` directly. The old code
+was a systematic bug independent of m07: `"auto"` → `.get("auto","fr-unstranded")`
+= `"fr-unstranded"` for all comparisons regardless of run history.
+
+New module-level `_strand_to_rmats_libtype(strand)` maps FR→fr-firststrand,
+RF→fr-secondstrand, unstranded→fr-unstranded, and raises on any other label.
+
+#### Also: dead code M12 removed; `strandedness_to_featurecounts` explicit
+
+- M12: `stranded` variable (computed but never passed to `m12_te_locus.py locus-count`)
+  removed.
+- `strandedness_to_featurecounts`: replaced `else: return "2"` catch-all with
+  explicit dict lookup via `_validate_strand_label`, so "undetermined" no longer
+  silently returns "2" (FR).
+
+### Tests added
+
+`TestStrandednessResolution` in `tests/test_strandedness_regression.py`:
+
+| Test | What it covers |
+|------|---------------|
+| `test_validate_raises_on_undetermined` | AI1: no silent pass-through |
+| `test_validate_raises_on_auto` | AI1: "auto" is not a resolved label |
+| `test_strand_to_rmats_*` | _strand_to_rmats_libtype unit tests |
+| `test_consensus_warns_on_non_unanimous` | AI2: non-unanimous warns |
+| `test_consensus_raises_on_weak_majority` | AI2: < 67% majority raises |
+| `test_consensus_reads_tsv_when_m07_skipped` | Core regression (Fix B) |
+| `test_consensus_raises_without_tsv_and_no_map` | Fix A: no silent unstranded |
+| `test_m17_delegates_to_strand_to_rmats_libtype` | AI3 source regression check |
+
+65 tests pass; 12 pre-existing smoke_test errors unchanged.
+
+### Does this change pipeline results?
+
+Yes, intentionally. Runs with `strandedness: auto` and m07 already done
+will now correctly use the strandedness detected by m07 (via TSV) instead
+of silently defaulting to "unstranded". Runs with explicit strandedness in
+config are unaffected (path 1 resolves immediately, same as before).
+
+### Tag and citation
+
+The manuscript cites **v1.1.2** (commit `e022cf6`), unchanged.
+v1.1.7 is not cited in the manuscript.
+
+---
+
+## [1.1.6] — 2026-08-17 — Fix: correct cfg attribute in provenance logging
+
+**Tag:** v1.1.6 — commit `372ef2f`
+**Date:** 2026-08-17
+**Supersedes:** v1.1.5 (ritirato)
+
+### Bug fixed
+
+v1.1.5 (cd29e9f) aggiungeva una riga `[PROVENANCE]` come prima riga di
+`mosaic_output/logs/session.log` a ogni `mosaic run`, ma usava
+`cfg.wd` (attributo inesistente) invece di `cfg.project.wd`.
+
+**Errore:** `AttributeError: 'MosaicConfig' object has no attribute 'wd'`
+
+v1.1.6 corregge l'attributo. La funzionalità di provenance logging è
+ora operativa: la prima riga di `session.log` è:
+
+```
+[PROVENANCE] <ISO-timestamp>
+  mosaic.__file__=<path>/mosaic_code/mosaic/cli.py
+  scripts_dir=<path>/mosaic_code/scripts
+```
+
+### Perché questa funzionalità
+
+La provenienza del codice dipendeva dalla directory di lancio (`cwd` in
+`sys.path[0]`): se il runner veniva eseguito da una directory contenente
+una cartella `mosaic/`, Python trovava quella cartella prima del
+pacchetto installato. Loggare `mosaic.__file__` e `scripts_dir` a
+runtime rende la provenienza verificabile a posteriori senza ricostruire
+lo stato dell'ambiente.
+
+### Files changed
+
+- `mosaic/cli.py`: `cfg.wd` → `cfg.project.wd` in `cmd_run`
+
+### Does this change pipeline results?
+
+No. La riga di provenance viene scritta prima che qualsiasi modulo
+venga avviato. Nessun risultato biologico è influenzato.
+
+### Tag e citazione
+
+Il manoscritto cita **v1.1.2** (commit `e022cf6`), invariato.
+v1.1.6 non è citato nel manoscritto.
+
+### Nota su smoke test
+
+Il crash di v1.1.5 ha evidenziato l'assenza di un test end-to-end che
+verifichi l'avvio della pipeline su un config minimale. Un test di
+questo tipo (`mosaic run` su 2 campioni finti, 1 confronto, moduli
+ridotti al minimo) sarà aggiunto in una release successiva come
+`tests/test_smoke_run.py`.
+
+---
+
+## [1.1.5] — 2026-08-17 — RETIRED (not runnable): AttributeError `cfg.wd` at startup of `mosaic run`
+
+**Tag:** v1.1.5 — commit `cd29e9f`
+**Status:** RITIRATO — tag eliminato da GitHub il 2026-08-17
+**Sostituito da:** v1.1.6 (372ef2f)
+
+### Perché ritirato
+
+v1.1.5 introduceva il logging di provenance in `cmd_run` (cli.py), ma
+usava `cfg.wd` invece di `cfg.project.wd`. L'attributo `wd` non esiste
+in `MosaicConfig` — si trova in `MosaicConfig.project.wd`.
+
+Effetto: `AttributeError: 'MosaicConfig' object has no attribute 'wd'`
+a ogni avvio di `mosaic run`, su qualunque config. La pipeline non
+arrivava al primo modulo.
+
+v1.1.5 è stato pushato e immediatamente ritirato lo stesso giorno
+(2026-08-17) senza mai essere usato in alcun run. Il commit `cd29e9f`
+rimane nella storia (è il padre di v1.1.6) ma il tag è eliminato.
+
+### Fix
+
+v1.1.6 (372ef2f) corregge l'attributo in `cfg.project.wd`.
+
+---
+
+## [1.1.4] — 2026-08-17 — Test fix: use data.frame for biotype-wilcox OOB regression test
+
+**Tag:** v1.1.4 — commit `41dc43d`
+**Date:** 2026-08-17
+**Supersedes:** v1.1.3 (e39731f)
+
+### What changed
+
+Three tests introduced in v1.1.3 used a `matrix` to represent `pct_df`,
+but the actual pipeline object is a `data.frame`. The distinction matters:
+
+| Object | Row OOB (large integer index) | Behaviour |
+|--------|-------------------------------|-----------|
+| `matrix` | `matrix[999L, col]` | ERROR: subscript out of bounds |
+| `data.frame` | `data.frame[999L, col]` | `NA_real_` silently |
+
+The tests were asserting the wrong (matrix) behaviour; the as.character()
+fix in v1.1.3 remained correct. Tests rewritten with a real `data.frame`
+built via `sapply(...) |> as.data.frame()`, matching the pipeline code.
+Also fixed an off-by-one in the matrix dimension used in the intersect
+test (`nrow=3` → `nrow=2`).
+
+**Files changed:**
+- `tests/test_strandedness_regression.py`:
+  - `TestB1_M14_BiotypeWilcox`: three tests rewritten with `data.frame`
+  - `TestB1_M12_IntersectSafe`: matrix dimension corrected to `nrow=2`
+
+### Does this change pipeline results?
+
+No. The production code in `m14_report.qmd` was correct since v1.1.3;
+only the tests were wrong. All 22 tests pass on v1.1.4.
+
+### Tag and citation
+
+The manuscript cites **v1.1.2** (commit `e022cf6`), unchanged.
+v1.1.4 is a test-suite maintenance release.
+
+---
+
 ## [1.1.2] — 2026-08-10 — M14: Kraken2/Bracken version strings corrected in report template
 
 ### M14 report: metatranscriptomics version strings — documentation fix only
