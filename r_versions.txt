@@ -1,0 +1,14 @@
+# R stack used by MOSAIC (system R, not the conda env). Generated 2026-10-30 with:
+#   Rscript -e 'R.version.string; packageDescription(<pkg>)$Version / $Built'
+# Note: r-base-core was 4.5.1 from 2026-03-09 (period of all canonical runs) and was upgraded
+# to 4.5.2 on 2026-10-13 (dpkg.log). Packages below were installed/built under R 4.5.1
+# in /usr/local/lib/R (2026-03-09/12) and were not reinstalled after the upgrade.
+R	4.5.2	R version 4.5.2 (2025-10-31)
+DESeq2	1.50.2	R 4.5.1; x86_64-pc-linux-gnu; 2026-03-09 11:43:15 UTC; unix
+ashr	2.2.63	R 4.5.1; x86_64-pc-linux-gnu; 2026-03-09 11:47:08 UTC; unix
+clusterProfiler	4.18.4	R 4.5.1; ; 2026-03-09 12:06:20 UTC; unix
+WGCNA	1.74	R 4.5.1; x86_64-pc-linux-gnu; 2026-03-12 07:24:18 UTC; unix
+STRINGdb	2.22.0	R 4.5.1; ; 2026-03-12 07:24:16 UTC; unix
+optparse	1.7.5	R 4.5.1; ; 2026-03-09 11:47:07 UTC; unix
+dplyr	1.2.0	R 4.5.1; x86_64-pc-linux-gnu; 2026-03-09 12:00:03 UTC; unix
+apeglm	NOT_INSTALLED	

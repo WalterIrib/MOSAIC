@@ -1,16 +1,19 @@
 # MOSAIC main conda environment ("mosaic").
-# All versions below were verified from the live environment used to produce the
-# manuscript results (see versions.txt / Supplementary Table S10).
 #
 #   conda env create -f environment.yml
 #   conda activate mosaic
 #
-# Notes
-# -----
-# * R (4.5.1) and the Bioconductor/CRAN packages are pinned here via bioconda so a
-#   single `conda env create` reproduces the full stack. The authors' original
-#   runs used system R 4.5.1 with the same package versions installed via
-#   BiocManager (see scripts/install_r_packages.R for that alternative).
+# Provenance of the versions below
+# --------------------------------
+# * Command-line tools and Python libraries: pinned to the live "mosaic" conda
+#   env that produced the manuscript results; full export in versions.txt
+#   (`conda list --export`). Tool versions are reported in Supplementary
+#   Table S10.
+# * R / Bioconductor: the manuscript results were produced with the SYSTEM R
+#   4.5.1 (not a conda R), with the package versions listed in r_versions.txt
+#   (installed via BiocManager; see scripts/install_r_packages.R). The R stack is
+#   therefore NOT part of versions.txt. The r-base and R-package pins below
+#   reproduce the same package versions inside conda, on r-base 4.5.2.
 # * Two tools run in SEPARATE environments and are NOT part of this file:
 #     - Telescope 1.0.3  (benchmark only) -> environment_telescope.yml (Python 3.7)
 #     - HUMAnN3 / MetaPhlAn (optional M20b) -> conda env "humann3"
@@ -19,7 +22,7 @@
 #   JACUSA2 2.1.16 IS provided by bioconda (jar under share/).
 #   DCC 0.5.0 IS provided by bioconda (see below).
 #   CIRI2 removed in v1.1.1: M06 now uses DCC on STAR chimeric junction files.
-# * Known transitive dependency not listed explicitly: blast-2.17.0
+# * Known transitive dependency not listed explicitly: blast 2.5.0 (blastn -version)
 #   (pulled in via kraken2 or suppa). Not used directly by MOSAIC scripts.
 name: mosaic
 channels:
