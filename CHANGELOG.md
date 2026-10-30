@@ -108,18 +108,18 @@ v1.1.7 is not cited in the manuscript.
 
 **Tag:** v1.1.6 — commit `372ef2f`
 **Date:** 2026-08-17
-**Supersedes:** v1.1.5 (ritirato)
+**Supersedes:** v1.1.5 (retired)
 
 ### Bug fixed
 
-v1.1.5 (cd29e9f) aggiungeva una riga `[PROVENANCE]` come prima riga di
-`mosaic_output/logs/session.log` a ogni `mosaic run`, ma usava
-`cfg.wd` (attributo inesistente) invece di `cfg.project.wd`.
+v1.1.5 (cd29e9f) added a `[PROVENANCE]` line as the first line of
+`mosaic_output/logs/session.log` on every `mosaic run`, but used
+`cfg.wd` (non-existent attribute) instead of `cfg.project.wd`.
 
-**Errore:** `AttributeError: 'MosaicConfig' object has no attribute 'wd'`
+**Error:** `AttributeError: 'MosaicConfig' object has no attribute 'wd'`
 
-v1.1.6 corregge l'attributo. La funzionalità di provenance logging è
-ora operativa: la prima riga di `session.log` è:
+v1.1.6 corrects the attribute. Provenance logging is now working:
+the first line of `session.log` is:
 
 ```
 [PROVENANCE] <ISO-timestamp>
@@ -127,14 +127,14 @@ ora operativa: la prima riga di `session.log` è:
   scripts_dir=<path>/mosaic_code/scripts
 ```
 
-### Perché questa funzionalità
+### Why this feature
 
-La provenienza del codice dipendeva dalla directory di lancio (`cwd` in
-`sys.path[0]`): se il runner veniva eseguito da una directory contenente
-una cartella `mosaic/`, Python trovava quella cartella prima del
-pacchetto installato. Loggare `mosaic.__file__` e `scripts_dir` a
-runtime rende la provenienza verificabile a posteriori senza ricostruire
-lo stato dell'ambiente.
+Code provenance depended on the launch directory (`cwd` in
+`sys.path[0]`): if the runner was executed from a directory containing
+a `mosaic/` folder, Python found that folder before the installed
+package. Logging `mosaic.__file__` and `scripts_dir` at runtime makes
+provenance verifiable after the fact without reconstructing the state
+of the environment.
 
 ### Files changed
 
@@ -142,20 +142,20 @@ lo stato dell'ambiente.
 
 ### Does this change pipeline results?
 
-No. La riga di provenance viene scritta prima che qualsiasi modulo
-venga avviato. Nessun risultato biologico è influenzato.
+No. The provenance line is written before any module is started.
+No biological result is affected.
 
-### Tag e citazione
+### Tag and citation
 
-Il manoscritto cita **v1.1.2** (commit `e022cf6`), invariato.
-v1.1.6 non è citato nel manoscritto.
+The manuscript cites **v1.1.2** (commit `e022cf6`), unchanged.
+v1.1.6 is not cited in the manuscript.
 
-### Nota su smoke test
+### Note on smoke test
 
-Il crash di v1.1.5 ha evidenziato l'assenza di un test end-to-end che
-verifichi l'avvio della pipeline su un config minimale. Un test di
-questo tipo (`mosaic run` su 2 campioni finti, 1 confronto, moduli
-ridotti al minimo) sarà aggiunto in una release successiva come
+The v1.1.5 crash exposed the absence of an end-to-end test that
+checks pipeline startup on a minimal config. A test of this kind
+(`mosaic run` on 2 dummy samples, 1 comparison, modules reduced to
+the minimum) will be added in a later release as
 `tests/test_smoke_run.py`.
 
 ---
@@ -163,26 +163,26 @@ ridotti al minimo) sarà aggiunto in una release successiva come
 ## [1.1.5] — 2026-08-17 — RETIRED (not runnable): AttributeError `cfg.wd` at startup of `mosaic run`
 
 **Tag:** v1.1.5 — commit `cd29e9f`
-**Status:** RITIRATO — tag eliminato da GitHub il 2026-08-17
-**Sostituito da:** v1.1.6 (372ef2f)
+**Status:** RETIRED — tag deleted from GitHub on 2026-08-17
+**Superseded by:** v1.1.6 (372ef2f)
 
-### Perché ritirato
+### Why retired
 
-v1.1.5 introduceva il logging di provenance in `cmd_run` (cli.py), ma
-usava `cfg.wd` invece di `cfg.project.wd`. L'attributo `wd` non esiste
-in `MosaicConfig` — si trova in `MosaicConfig.project.wd`.
+v1.1.5 introduced provenance logging in `cmd_run` (cli.py), but
+used `cfg.wd` instead of `cfg.project.wd`. The `wd` attribute does not
+exist in `MosaicConfig` — it lives in `MosaicConfig.project.wd`.
 
-Effetto: `AttributeError: 'MosaicConfig' object has no attribute 'wd'`
-a ogni avvio di `mosaic run`, su qualunque config. La pipeline non
-arrivava al primo modulo.
+Effect: `AttributeError: 'MosaicConfig' object has no attribute 'wd'`
+at every startup of `mosaic run`, with any config. The pipeline did not
+reach the first module.
 
-v1.1.5 è stato pushato e immediatamente ritirato lo stesso giorno
-(2026-08-17) senza mai essere usato in alcun run. Il commit `cd29e9f`
-rimane nella storia (è il padre di v1.1.6) ma il tag è eliminato.
+v1.1.5 was pushed and retired the same day (2026-08-17) without ever
+being used in any run. Commit `cd29e9f` remains in the history (it is
+the parent of v1.1.6) but the tag has been deleted.
 
 ### Fix
 
-v1.1.6 (372ef2f) corregge l'attributo in `cfg.project.wd`.
+v1.1.6 (372ef2f) corrects the attribute to `cfg.project.wd`.
 
 ---
 
