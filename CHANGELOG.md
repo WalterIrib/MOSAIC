@@ -19,7 +19,7 @@ fell through to `return "unstranded"`.
 
 **Impact:**
 - **M08 featureCounts**: `-s 0` instead of `-s 2` for the 2 new comparisons
-  (WT_vs_parental, AA_vs_parental) in the Lucibello v1.1.7 rerun.
+  (WT_vs_parental, AA_vs_parental) in an unrelated in-house dataset (v1.1.7 rerun).
 - **M16 featureCounts**: would have gotten `-s 0` for all 6 comparisons (file
   is created once globally; new directory → featurecounts_transcripts.txt did
   not exist → would re-run with wrong flag).

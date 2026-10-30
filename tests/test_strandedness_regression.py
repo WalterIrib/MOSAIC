@@ -263,7 +263,7 @@ class TestB1_M14_SatWilcox:
     """
     M14 sat-wilcox-per-family-run chunk: treat_sids used as column subscript.
     Without as.character(), large integer IDs cause 'undefined columns selected'.
-    Crash confirmed in Lucibello run at step 58/281.
+    Crash confirmed in an unrelated in-house dataset run at step 58/281.
     """
 
     def _run_r(self, code: str) -> subprocess.CompletedProcess:
@@ -524,7 +524,7 @@ class TestB1_M12_IntersectSafe:
     R's intersect() implementation: c(x[match(x,y,0L)>0L], y[0L])
     The appended y[0L]=character(0) forces type coercion → result is character.
     Therefore m12 does NOT need as.character() and must NOT be changed.
-    Lucibello m12 completed 4/4 comparisons with numeric IDs, confirming safety.
+    The m12 run on an unrelated in-house dataset completed 4/4 comparisons with numeric IDs, confirming safety.
     """
 
     def _run_r(self, code: str) -> subprocess.CompletedProcess:

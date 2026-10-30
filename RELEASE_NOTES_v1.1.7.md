@@ -15,7 +15,7 @@ fell through to `return "unstranded"`.
 
 **Impact:**
 - **M08 featureCounts**: `-s 0` instead of `-s 2` for the 2 new comparisons
-  (WT_vs_parental, AA_vs_parental) in the Lucibello v1.1.7 rerun.
+  (WT_vs_parental, AA_vs_parental) in an unrelated in-house dataset (v1.1.7 rerun).
 - **M16 featureCounts**: would have gotten `-s 0` for all 6 comparisons (file
   is created once globally; new directory → featurecounts_transcripts.txt did
   not exist → would re-run with wrong flag).
@@ -98,7 +98,7 @@ config are unaffected (path 1 resolves immediately, same as before).
 The manuscript cites **v1.1.2** (commit `e022cf6`), unchanged.
 v1.1.7 is not cited in the manuscript.
 
-### Rerun scope for Lucibello (after applying this fix)
+### Rerun scope for an unrelated in-house dataset (after applying this fix)
 
 State entries to clear before resuming (see AI5 in session notes):
 - `m08_deseq2/WT_vs_parental`, `m08_deseq2/AA_vs_parental` (wrong `-s 0`)
