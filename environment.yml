@@ -52,7 +52,7 @@ dependencies:
   # ── RNA editing ────────────────────────────────────────────────────────────
   - jacusa2=2.1.16               # M19
   - dcc=0.5.0                    # M06 circRNA detection (STAR chimeric junctions)
-  - bwa=0.7.19                   # M23 TE insertion detection (default aligner)
+  - bwa=0.7.18                   # M23 TE insertion detection (default aligner)
   # ── Metatranscriptomics (optional M20) ─────────────────────────────────────
   - kraken2=2.17.1
   # ── Python libraries ───────────────────────────────────────────────────────
