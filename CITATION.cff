@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata below."
 type: software
 title: "MOSAIC — Multi-Omic Sequencing Analysis and Integrated Characterization"
-version: 1.1.7
-date-released: "2026-08-17"
+version: 1.1.8
+date-released: "2026-11-05"
 url: "https://github.com/WalterIrib/MOSAIC"
 repository-code: "https://github.com/WalterIrib/MOSAIC"
 license: MIT
