@@ -20,6 +20,14 @@ test_data/reference/
 test_data/mosaic_output/
 test_data/coldata.tsv
 test_data/config_test.yaml
+# indexes built by test_data/generate_test_data.sh inside synth_ref/
+test_data/synth_ref/dfam/*.bt2
+test_data/synth_ref/genome.fa.amb
+test_data/synth_ref/genome.fa.ann
+test_data/synth_ref/genome.fa.bwt
+test_data/synth_ref/genome.fa.pac
+test_data/synth_ref/genome.fa.sa
+test_data/synth_ref/star_index/
 
 # Quarto / knitr intermediate figure dirs
 scripts/m14_report_files_*/
