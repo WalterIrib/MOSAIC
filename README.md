@@ -214,7 +214,7 @@ See `.github/workflows/smoke.yml` for CI integration.
 
 To reproduce the manuscript numbers on the complete METACAR dataset:
 
-**1. Download reference files** (~50 GB):
+**1. Download reference files** (~67 GB with all indexes and Kraken2 DB; see "Disk" above):
 
 | File | Source |
 |------|--------|
@@ -237,7 +237,7 @@ with `mosaic run configs/config_charna.yaml` (module M00, or use `fastq-dump`/`f
 python check_canonical.py --mosaic-output /path/to/mosaic_output
 ```
 Prints PASS/FAIL with expected-vs-observed for gene / TE-family / satellite /
-locus / splicing / editing counts per comparison. TE-locus counts are expected to be
+locus / splicing / editing counts per comparison.
 TE-locus counts must match the published values. `check_canonical.py` accepts
 up to +8 loci for mito-ChaRNA vs ChaRNA (`loci_boundary`; +29, +24 and +23 for
 the De Cecco comparisons): these are the significant loci whose
@@ -245,6 +245,17 @@ the De Cecco comparisons): these are the significant loci whose
 below 1 at full precision. `m12_deseq2.R` applies the |log2FC| ≥ 1 threshold to
 the full-precision value, so they are not significant; a threshold applied to
 the rounded tables would count them (Supplementary Table S8).
+
+### Determinism and fixed parameters
+
+- Seeds: `project.random_seed` (default 42) is passed to bowtie2 (M05), to the
+  M18 network layout and to the `mosaic-refs` index builders.
+- M18 community detection (`cluster_louvain` in `scripts/m18_network.R`) runs
+  without a seed: community labels and membership can differ between runs.
+- `mosaic-refs` (`mosaic/refs.py`): only the human reference is current
+  (GENCODE v49 / Ensembl 115, as used for the manuscript). The other organisms
+  still point to earlier releases: mouse GRCm39 GENCODE vM34 / Ensembl 111,
+  rat mRatBN7.2 (rn7) Ensembl 111, zebrafish GRCz11 Ensembl 111.
 
 ---
 
