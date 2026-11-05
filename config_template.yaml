@@ -160,6 +160,8 @@ trimming:
   cut_right: false               # fastp --cut_right (sliding-window 3' trimming)
   cut_window_size: 4             # used only when cut_right: true
   cut_mean_quality: 20           # used only when cut_right: true
+  pe_correction: false           # fastp -c (PE overlap base correction)
+  disable_adapter_trimming: false  # fastp -A (replaces --detect_adapter_for_pe)
 
 # =============================================================================
 # circRNA (M06, DCC)

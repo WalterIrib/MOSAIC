@@ -210,6 +210,8 @@ def test_defaults():
     assert cfg.trimming.low_complexity_filter is False
     assert cfg.trimming.trim_poly_x is False
     assert cfg.trimming.cut_right is False
+    assert cfg.trimming.pe_correction is False
+    assert cfg.trimming.disable_adapter_trimming is False
     assert cfg.trimming.min_length == 36
     assert cfg.trimming.min_phred == 20
     assert cfg.circrna.min_bsj_reads == 2

@@ -142,14 +142,13 @@ class ModulesConfig:
 class TrimmingConfig:
     min_phred: int = 20
     min_length: int = 36
-    min_length_warning: int = 75
     low_complexity_filter: bool = False  # MUST be False — TE/satellite safety
-    pe_correction: bool = True
+    pe_correction: bool = False          # fastp -c (PE overlap correction); OFF as in all published runs
     trim_poly_x: bool = False            # MUST be False — satellite safety
     cut_right: bool = False              # fastp --cut_right (sliding window 3'); OFF as in all published runs
     cut_window_size: int = 4
     cut_mean_quality: int = 20
-    disable_adapter_trimming: bool = False  # True for fusion-suspected tumors
+    disable_adapter_trimming: bool = False  # fastp -A; True for fusion-suspected tumors
 
     def validate(self) -> None:
         if self.low_complexity_filter:
@@ -558,9 +557,8 @@ def load_config(path: str | Path) -> MosaicConfig:
     trimming = TrimmingConfig(
         min_phred=tr_raw.get("min_phred", 20),
         min_length=tr_raw.get("min_length", 36),
-        min_length_warning=tr_raw.get("min_length_warning", 75),
         low_complexity_filter=tr_raw.get("low_complexity_filter", False),
-        pe_correction=tr_raw.get("pe_correction", True),
+        pe_correction=tr_raw.get("pe_correction", False),
         trim_poly_x=tr_raw.get("trim_poly_x", False),
         cut_right=tr_raw.get("cut_right", False),
         cut_window_size=tr_raw.get("cut_window_size", 4),

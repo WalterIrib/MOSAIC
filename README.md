@@ -143,7 +143,9 @@ Key knobs:
   fatal. Reruns resume from the `.mosaic_state.json` checkpoint.
 - `modules:` — enable/disable each module; M20/M20b are **off by default**.
 - `trimming:` — fastp `-q min_phred` (default 20) and `-l min_length` (default 36);
-  `cut_right` (default `false`) adds `--cut_right --cut_window_size --cut_mean_quality`.
+  `cut_right` (default `false`) adds `--cut_right --cut_window_size --cut_mean_quality`;
+  `pe_correction` (default `false`) adds `-c`; `disable_adapter_trimming` (default
+  `false`) replaces `--detect_adapter_for_pe` with `-A`.
 - `circrna.min_bsj_reads` — minimum back-splice junction reads for DCC (default 2).
 - `project.random_seed` — seed for bowtie2 (M05), the M18 network layout and the
   `mosaic-refs` index builds (default 42).

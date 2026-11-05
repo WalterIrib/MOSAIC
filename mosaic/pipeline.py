@@ -853,7 +853,8 @@ class ModuleRunner:
             if row.get("R1") and row.get("R2"):
                 coldata_fq[sid] = (Path(row["R1"]), Path(row["R2"]))
 
-        # fastp quality options from trimming.* (defaults -q 20 -l 36, cut_right off)
+        # fastp options from trimming.* (defaults: -q 20 -l 36; cut_right, pe_correction
+        # and disable_adapter_trimming off, i.e. the command of the published runs)
         tr = cfg.trimming
         trim_opts = ["-q", str(tr.min_phred), "-l", str(tr.min_length)]
         if tr.cut_right:
@@ -883,8 +884,9 @@ class ModuleRunner:
                     "-j", str(out_sid / f"{sid}.fastp.json"),
                     "-h", str(out_sid / f"{sid}.fastp.html"),
                     "--thread", str(min(cfg.threads, 16)),
-                    "--detect_adapter_for_pe",
-                ] + trim_opts
+                ] + (["-A"] if tr.disable_adapter_trimming
+                     else ["--detect_adapter_for_pe"]) \
+                  + (["-c"] if tr.pe_correction else []) + trim_opts
             else:
                 if sid in coldata_fq and coldata_fq[sid][0].exists():
                     r1 = coldata_fq[sid][0]
@@ -897,7 +899,7 @@ class ModuleRunner:
                     "-j", str(out_sid / f"{sid}.fastp.json"),
                     "-h", str(out_sid / f"{sid}.fastp.html"),
                     "--thread", str(min(cfg.threads, 16)),
-                ] + trim_opts
+                ] + (["-A"] if tr.disable_adapter_trimming else []) + trim_opts
 
             ret = run_cmd(cmd, log_file=self._log("m02_trim", sid))
             if ret != 0:
