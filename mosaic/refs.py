@@ -32,7 +32,7 @@ from .log import get_logger, info, warn, error, success, section
 class OrganismSpec:
     organism:     str
     genome_build: str
-    ensembl_release: str        # e.g. "111"
+    ensembl_release: str        # e.g. "115"
     ensembl_fasta_url: str
     ensembl_gtf_url:  str
     annotation_source: str      # GENCODE | Ensembl
@@ -47,24 +47,26 @@ _ORGANISM_CATALOGUE: dict[str, OrganismSpec] = {
     "human": OrganismSpec(
         organism="human",
         genome_build="hg38",
-        ensembl_release="111",
+        # GENCODE 49 = Ensembl 115 (gencodegenes.org release history);
+        # same files as db_manager.py and the published runs
+        ensembl_release="115",
         ensembl_fasta_url=(
-            "https://ftp.ensembl.org/pub/release-111/fasta/"
+            "https://ftp.ensembl.org/pub/release-115/fasta/"
             "homo_sapiens/dna/Homo_sapiens.GRCh38.dna_sm.primary_assembly.fa.gz"
         ),
         ensembl_gtf_url=(
-            "https://ftp.ensembl.org/pub/release-111/gtf/"
-            "homo_sapiens/Homo_sapiens.GRCh38.111.gtf.gz"
+            "https://ftp.ensembl.org/pub/release-115/gtf/"
+            "homo_sapiens/Homo_sapiens.GRCh38.115.gtf.gz"
         ),
         annotation_source="GENCODE",
-        gencode_release="v44",
+        gencode_release="v49",
         gencode_fasta_url=(
             "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/"
-            "release_44/GRCh38.primary_assembly.genome.fa.gz"
+            "release_49/GRCh38.primary_assembly.genome.fa.gz"
         ),
         gencode_gtf_url=(
             "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/"
-            "release_44/gencode.v44.primary_assembly.annotation.gtf.gz"
+            "release_49/gencode.v49.annotation.gtf.gz"
         ),
         dfam_assembly="hg38",
     ),
