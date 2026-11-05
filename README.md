@@ -70,8 +70,11 @@ Binary/script tools set via `config.yaml`: Arriba 2.4.0 (M15).
 
 **Software.** `environment.yml` pins the command-line tools and Python libraries
 of the environment that produced the manuscript results (full export:
-`versions.txt`). The R / Bioconductor stack is the system R: all published runs
-used **R 4.5.1**; package versions and build R are listed in `r_versions.txt`.
+`versions.txt`). All published runs used **R 4.5.1** (system R; package
+versions and build R in `r_versions.txt`); `environment.yml` pins `r-base=4.5.1`
+and the same R package versions. Use R 4.5.1: under R 4.5.2 a few dozen TE loci
+at |log2FC| = 1 change significance (see "Reproducibility of the manuscript
+numbers").
 
 **Hardware used for the published runs.** One desktop workstation: Intel Core
 i5-13500 (20 threads), 32 GB RAM, no GPU. No cluster is required.
@@ -99,7 +102,7 @@ Steps without timestamps in their logs (DESeq2, bowtie2 TE/satellite counting,
 
 - **M20b (HUMAnN3 functional profiling) is experimental and not tested in this
   release.** It requires a separate `humann3` conda environment (HUMAnN3 is not
-  compatible with the pinned R 4.5.x / Bioconductor stack in `environment.yml`).
+  compatible with the pinned R 4.5.1 / Bioconductor stack in `environment.yml`).
   M20 (Kraken2/Bracken taxonomic classification of unmapped reads) is fully
   supported and validated. To use M20b, create the `humann3` env following the
   [HUMAnN3 installation guide](https://huttenhower.sph.harvard.edu/humann/) and
