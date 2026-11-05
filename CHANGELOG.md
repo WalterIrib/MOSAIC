@@ -38,6 +38,8 @@ manuscript numbers").
   directory; added to the automatic `structural` CI job. (3c7ae7d)
 
 ### Packaging and metadata
+- `environment.yml` pins `r-base=4.5.1`, the R version of the published
+  results (was 4.5.2); no other pin changes. (b2f8490)
 - Version 1.1.8 in `setup.py`, `mosaic/__init__.py` and `CITATION.cff`.
   (88a74ab, 9efc4b5)
 - `.zenodo.json` with explicit metadata for the GitHub–Zenodo integration.
@@ -50,8 +52,8 @@ manuscript numbers").
 ### Documentation
 - README: installation and computational requirements, archived versions
   (Zenodo DOI for v1.1.2), determinism and fixed parameters, reproducibility
-  of the manuscript numbers, smoke-test duration, script name.
-  (e867492, 2a5169e, 44a11db)
+  of the manuscript numbers, smoke-test duration, script name; R 4.5.1 in
+  Installation. (e867492, 2a5169e, 44a11db, e4aa880, 221c2c0)
 
 ### Correction to the [1.1.0] entry
 The [1.1.0] entry states that "the genome-wide run reproduced the canonical
@@ -60,9 +62,12 @@ is not correct. The genome-wide v1.1 run of 2026-07-09, in the same R
 installation as the manuscript outputs and with a byte-identical
 `mito-ChaRNA_vs_ChaRNA_te_de.tsv`, gives 25,493 significant loci for
 mito-ChaRNA vs ChaRNA instead of 25,489: these are 4 of the 8 loci whose
-shrunk log2FC rounds to ±1.0000 and that are >= 1 at full precision. For the
-results in the current R installation see the README, "Reproducibility of the
-manuscript numbers". The [1.1.0] text below is left unchanged.
+shrunk log2FC rounds to ±1.0000 and that are >= 1 at full precision. Re-run
+under R 4.5.1 on 2026-11-05, the four comparisons give +4, +16, +13 and +2
+loci (mito-ChaRNA vs ChaRNA, SEN_L vs EP, SEN_E vs EP, SEN_L vs SEN_E), all
+of them loci at ±1.0000 and none lost; under R 4.5.2 the ashr estimates move
+further boundary loci (README, "Reproducibility of the manuscript numbers").
+The [1.1.0] text below is left unchanged.
 
 ---
 
