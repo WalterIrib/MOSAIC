@@ -245,22 +245,22 @@ locus / splicing / editing counts per comparison.
 **Reproducibility of the manuscript numbers.** The gene-, TE family- and
 satellite-level results of the manuscript are reproduced exactly (byte-identical
 tables) by re-running the statistical modules of this release on the archived
-count matrices. The locus-level (M12) significant sets differ by fewer than 0.02%
-of the tested loci and about 0.1% of the significant set, all at the
+count matrices. The locus-level (M12) significant sets differ by fewer than
+0.02% of the tested loci and about 0.1% of the significant set, all at the
 |log2FC| = 1 boundary, for two reasons. (i) The manuscript counts were produced
 before the first tagged release with the |log2FC| >= 1 threshold evaluated as a
 strict inequality on values rounded to four decimals, whereas all tagged
 releases evaluate the inclusive threshold on the full-precision value (8, 29, 24
 and 23 loci round to exactly ±1.0000 in mito-ChaRNA vs ChaRNA, SEN_L vs EP,
-SEN_E vs EP and SEN_L vs SEN_E). With the distributed environment (R 4.5.1,
-`environment.yml`) the locus-level sets differ from the manuscript only by this
-rule: +4 (mito-ChaRNA vs ChaRNA, 25,493), +16 (SEN_L vs EP, 376,180), +13 (SEN_E
-vs EP, 342,844), +2 (SEN_L vs SEN_E, 75,354). (ii) Under R 4.5.2 the ashr
-shrinkage estimates differ by up to 0.04 log2 units, so a further few dozen
-boundary loci change in both directions (net +2, +16, +46, +2 vs the
-manuscript), with identical adjusted P values and counts. `check_canonical.py`
-accepts [published, published + boundary count] and passes under R 4.5.1; under
-R 4.5.2 SEN_E vs EP exceeds the band by 22 loci.
+SEN_E vs EP and SEN_L vs SEN_E). With R 4.5.1 and the pinned DESeq2, ashr and
+mixsqp versions (test environment r451; see CHANGELOG) the locus-level sets
+differ from the manuscript only by this rule: +4 (mito-ChaRNA vs ChaRNA,
+25,493), +16 (SEN_L vs EP, 376,180), +13 (SEN_E vs EP, 342,844), +2 (SEN_L vs
+SEN_E, 75,354). (ii) Under R 4.5.2 the ashr shrinkage estimates differ by up to
+0.04 log2 units, so a further few dozen boundary loci change in both directions
+(net +2, +16, +46, +2 vs the manuscript), with identical adjusted P values and
+counts. `check_canonical.py` accepts [published, published + boundary count] and
+passes under R 4.5.1; under R 4.5.2 SEN_E vs EP exceeds the band by 22 loci.
 
 ### Determinism and fixed parameters
 

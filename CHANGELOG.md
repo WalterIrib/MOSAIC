@@ -66,7 +66,9 @@ installation as the manuscript outputs and with a byte-identical
 `mito-ChaRNA_vs_ChaRNA_te_de.tsv`, gives 25,493 significant loci for
 mito-ChaRNA vs ChaRNA instead of 25,489: these are 4 of the 8 loci whose
 shrunk log2FC rounds to ±1.0000 and that are >= 1 at full precision. Re-run
-under R 4.5.1 on 2026-11-05, the four comparisons give +4, +16, +13 and +2
+on 2026-11-05 under R 4.5.1 (test environment r451: a conda environment with
+r-base 4.5.1, DESeq2 1.50.2, ashr 2.2.63 and mixsqp 0.3.54, the versions
+pinned in `environment.yml`), the four comparisons give +4, +16, +13 and +2
 loci (mito-ChaRNA vs ChaRNA, SEN_L vs EP, SEN_E vs EP, SEN_L vs SEN_E), all
 of them loci at ±1.0000 and none lost; under R 4.5.2 the ashr estimates move
 further boundary loci (README, "Reproducibility of the manuscript numbers").
