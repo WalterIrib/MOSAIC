@@ -28,6 +28,9 @@ jobs:
       - name: CLI is importable
         run: python -m mosaic --help
 
+      - name: mosaic run starts (cmd_run reaches M02)
+        run: pytest tests/test_smoke_run.py -v
+
       - name: Config templates parse (with dummy env)
         env:
           MOSAIC_REF: /tmp/ref
