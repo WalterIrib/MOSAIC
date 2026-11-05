@@ -1,0 +1,19 @@
+{
+  "title": "MOSAIC — Multi-Omic Sequencing Analysis and Integrated Characterization",
+  "upload_type": "software",
+  "license": "MIT",
+  "creators": [
+    {
+      "name": "Arancio, Walter",
+      "affiliation": "Institute of Biomedical Research and Innovation (IRIB), National Research Council (CNR), Palermo, Italy",
+      "orcid": "0000-0002-6736-7734"
+    }
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/WalterIrib/MOSAIC",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}
