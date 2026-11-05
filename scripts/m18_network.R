@@ -37,7 +37,9 @@ option_list <- list(
   make_option("--padj",           type="double",    default=0.05),
   make_option("--lfc",            type="double",    default=1.0),
   make_option("--n-hub-genes",    type="integer",   default=20L,
-              help="Number of hub genes to report per analysis")
+              help="Number of hub genes to report per analysis"),
+  make_option("--seed",           type="integer",   default=42L,
+              help="Random seed for the network layout (project.random_seed)")
 )
 
 opt <- parse_args(OptionParser(option_list=option_list))
@@ -228,7 +230,7 @@ string_results <- tryCatch({
         deg_main <- degree(g_main)
 
         # Layout: Fruchterman-Reingold
-        set.seed(42)
+        set.seed(opt$seed)
         lo <- layout_with_fr(g_main, niter=500)
 
         n_comm <- max(membership(communities))

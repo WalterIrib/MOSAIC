@@ -209,8 +209,11 @@ def test_defaults():
 
     assert cfg.trimming.low_complexity_filter is False
     assert cfg.trimming.trim_poly_x is False
-    assert cfg.trimming.cut_right is True
+    assert cfg.trimming.cut_right is False
     assert cfg.trimming.min_length == 36
+    assert cfg.trimming.min_phred == 20
+    assert cfg.circrna.min_bsj_reads == 2
+    assert cfg.project.random_seed == 42
     assert cfg.mapping.bowtie2_score_min == "L,0,1.6"
     assert cfg.mapping.hisat2_allow_discordant is True
     assert cfg.quality.strandedness_concordance_threshold == 0.90

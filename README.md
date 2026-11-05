@@ -115,6 +115,25 @@ Key knobs:
   is logged and the run continues; backbone modules (m02/m04/m05/m08) are always
   fatal. Reruns resume from the `.mosaic_state.json` checkpoint.
 - `modules:` — enable/disable each module; M20/M20b are **off by default**.
+- `trimming:` — fastp `-q min_phred` (default 20) and `-l min_length` (default 36);
+  `cut_right` (default `false`) adds `--cut_right --cut_window_size --cut_mean_quality`.
+- `circrna.min_bsj_reads` — minimum back-splice junction reads for DCC (default 2).
+- `project.random_seed` — seed for bowtie2 (M05), the M18 network layout and the
+  `mosaic-refs` index builds (default 42).
+
+Fixed in the code, not configurable (keys with these names were accepted but
+ignored by earlier versions and have been removed from the templates):
+
+- JACUSA2 `call-2` runs with its default statistical model (no `-u DirMult:PHRED`;
+  formerly `thresholds.editing_model`).
+- STAR coordinate sorting uses `--limitBAMsortRAM 27000000000` (~27 GB; formerly
+  `memory_gb`).
+- The RSeQC BED12 is reused from `mosaic_output/mapping/annotation/genes.bed12` or
+  built from `databases.gtf` (formerly `databases.gtf_bed12`).
+- circRNA detection uses DCC only (`databases.ciri2_path` was never used).
+- The annotation version is whatever GTF `databases.gtf` points to
+  (`project.annotation_version` was a label only).
+- The M14 report title and format are fixed in `scripts/m14_report.qmd` (`report.*`).
 
 ---
 

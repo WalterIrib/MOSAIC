@@ -146,7 +146,7 @@ class TrimmingConfig:
     low_complexity_filter: bool = False  # MUST be False — TE/satellite safety
     pe_correction: bool = True
     trim_poly_x: bool = False            # MUST be False — satellite safety
-    cut_right: bool = True               # sliding window 3' trimming
+    cut_right: bool = False              # fastp --cut_right (sliding window 3'); OFF as in all published runs
     cut_window_size: int = 4
     cut_mean_quality: int = 20
     disable_adapter_trimming: bool = False  # True for fusion-suspected tumors
@@ -220,7 +220,7 @@ class QualityConfig:
 
 @dc.dataclass
 class CircRNAConfig:
-    min_bsj_reads: int = 5
+    min_bsj_reads: int = 2              # DCC -Nr <n> 1 (back-splice junction reads)
     min_samples_per_group: str = "all"  # 'all' or integer as string
     de_test: str = "auto"               # auto|deseq2|wilcoxon
 
@@ -528,7 +528,7 @@ def load_config(path: str | Path) -> MosaicConfig:
         wd=Path(proj_raw.get("wd", ".")),
         organism=organism,
         genome_build=genome_build,
-        random_seed=proj_raw.get("random_seed", 42),
+        random_seed=int(proj_raw.get("random_seed", 42)),
         biological_context=proj_raw.get("biological_context", "other"),
     )
 
@@ -562,7 +562,7 @@ def load_config(path: str | Path) -> MosaicConfig:
         low_complexity_filter=tr_raw.get("low_complexity_filter", False),
         pe_correction=tr_raw.get("pe_correction", True),
         trim_poly_x=tr_raw.get("trim_poly_x", False),
-        cut_right=tr_raw.get("cut_right", True),
+        cut_right=tr_raw.get("cut_right", False),
         cut_window_size=tr_raw.get("cut_window_size", 4),
         cut_mean_quality=tr_raw.get("cut_mean_quality", 20),
         disable_adapter_trimming=tr_raw.get("disable_adapter_trimming", False),
@@ -589,7 +589,7 @@ def load_config(path: str | Path) -> MosaicConfig:
 
     circ_raw = raw.get("circrna", {})
     circrna = CircRNAConfig(
-        min_bsj_reads=circ_raw.get("min_bsj_reads", 5),
+        min_bsj_reads=int(circ_raw.get("min_bsj_reads", 2)),
         min_samples_per_group=str(circ_raw.get("min_samples_per_group", "all")),
         de_test=circ_raw.get("de_test", "auto"),
     )
@@ -773,7 +773,6 @@ project:
   wd: /path/to/workdir          # output directory
   organism: {org}               # human | mouse | rat | zebrafish
   genome_build: {build}         # hg38 | hg19 | mm39 | mm10 | rn7
-  annotation_version: gencode_v49
   biological_context: {context} # tumor | aging | congenital | other
   random_seed: 42
 
@@ -836,7 +835,6 @@ thresholds:
   min_cov_editing:    5
   min_score_editing:  1.5
   min_ef_editing:     0.05
-  editing_model:      "DirMult:PHRED"
   min_reads_splicing: 10
   min_clip_te:        30
   min_support_te:     2
@@ -882,16 +880,14 @@ quality:
   strandedness_rf_threshold:    0.20  # ratio_fr below this → RF
 
 threads: 20
-memory_gb: 30
 
 trimming:
   min_phred: 20
   min_length: 36
   low_complexity_filter: false  # NEVER true — removes TE reads
   trim_poly_x: false            # NEVER true — removes satellite reads
+  cut_right: false              # fastp --cut_right; cut_window_size / cut_mean_quality apply only when true
 
-report:
-  title: "MOSAIC Analysis Report"
-  remove_test_notes: true
-  produce_pdf: false
+circrna:
+  min_bsj_reads: 2              # DCC: minimum back-splice junction reads
 """

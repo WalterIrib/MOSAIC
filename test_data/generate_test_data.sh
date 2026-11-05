@@ -118,7 +118,6 @@ project:
   wd: ${HERE}
   organism: human
   genome_build: hg38
-  annotation_version: gencode_v49
   random_seed: 42
 sequencing:
   type: PE
@@ -153,7 +152,6 @@ thresholds:
   min_cov_editing: 3
   min_score_editing: 1.0
   min_ef_editing: 0.03
-  editing_model: "DirMult:PHRED"
   min_reads_splicing: 3
   min_clip_te: 20
   min_support_te: 1
@@ -185,16 +183,11 @@ modules:
   m23_te_insertions: true
   m14_report: true
 threads: ${THREADS}
-memory_gb: 12
 trimming:
   min_phred: 20
   min_length: 36
   low_complexity_filter: false
   trim_poly_x: false
-report:
-  title: "MOSAIC smoke test"
-  remove_test_notes: false
-  produce_pdf: false
 YAML
 
 echo ""

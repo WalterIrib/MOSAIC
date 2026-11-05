@@ -31,6 +31,7 @@ def run_bowtie2_se(
     out_bam: Path,
     mate: str,       # "R1" or "R2"
     threads: int = 4,
+    seed: int = 42,
 ) -> dict:
     """
     Run Bowtie2 SE on one FASTQ file, sort and index BAM.
@@ -44,7 +45,7 @@ def run_bowtie2_se(
         "--very-sensitive-local",
         "--no-unal",          # discard unmapped reads
         "-p", str(threads),
-        "--seed", "42",
+        "--seed", str(seed),
         "-x", index,
         "-U", str(fastq),
     ]
@@ -190,6 +191,7 @@ def run_m05(
     classification_tsv: str | Path,
     out_dir: str | Path,
     threads: int = 4,
+    seed: int = 42,
 ) -> dict:
     """
     Full M05:
@@ -216,8 +218,8 @@ def run_m05(
         te_bam_r1 = bam_dir / f"{sid}_TE_R1.bam"
         te_bam_r2 = bam_dir / f"{sid}_TE_R2.bam"
 
-        run_bowtie2_se(sid, r1, te_index, te_bam_r1, "R1", threads)
-        run_bowtie2_se(sid, r2, te_index, te_bam_r2, "R2", threads)
+        run_bowtie2_se(sid, r1, te_index, te_bam_r1, "R1", threads, seed)
+        run_bowtie2_se(sid, r2, te_index, te_bam_r2, "R2", threads, seed)
 
         te_counts = count_te_fragments(
             te_bam_r1, te_bam_r2,
@@ -230,8 +232,8 @@ def run_m05(
         sat_bam_r1 = bam_dir / f"{sid}_satellite_R1.bam"
         sat_bam_r2 = bam_dir / f"{sid}_satellite_R2.bam"
 
-        run_bowtie2_se(sid, r1, satellite_index, sat_bam_r1, "R1", threads)
-        run_bowtie2_se(sid, r2, satellite_index, sat_bam_r2, "R2", threads)
+        run_bowtie2_se(sid, r1, satellite_index, sat_bam_r1, "R1", threads, seed)
+        run_bowtie2_se(sid, r2, satellite_index, sat_bam_r2, "R2", threads, seed)
 
         sat_counts = count_te_fragments(
             sat_bam_r1, sat_bam_r2,

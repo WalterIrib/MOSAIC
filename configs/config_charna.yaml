@@ -14,7 +14,6 @@ project:
   wd: ${MOSAIC_DATA}/mosaic_output
   organism: human
   genome_build: hg38
-  annotation_version: gencode_v49
   biological_context: other
   random_seed: 42
 
@@ -66,7 +65,6 @@ thresholds:
   min_cov_editing:    5
   min_score_editing:  1.5
   min_ef_editing:     0.05
-  editing_model:      "DirMult:PHRED"
   min_reads_splicing: 10          # ≥10 junction reads (see Methods §4.4 / CHANGELOG)
   min_clip_te:        30
   min_support_te:     2
@@ -102,7 +100,6 @@ modules:
   m14_report:       true
 
 threads: 20
-memory_gb: 30
 
 trimming:
   min_phred: 20
@@ -110,7 +107,3 @@ trimming:
   low_complexity_filter: false    # NEVER true — removes TE reads
   trim_poly_x: false              # NEVER true — removes satellite reads
 
-report:
-  title: "MOSAIC — Chromatin-associated RNA (mitosis)"
-  remove_test_notes: true
-  produce_pdf: false

@@ -725,6 +725,7 @@ class ModuleRunner:
             classification_tsv = str(class_tsv) if class_tsv.exists() else "",
             out_dir      = out_dir,
             threads      = cfg.threads,
+            seed         = cfg.project.random_seed,
         )
 
         # Copy matrices to integrated/, filtering non-TE artefacts from te_counts.
@@ -818,7 +819,7 @@ class ModuleRunner:
         cfg_m06.gtf                = str(Path(cfg.databases.gtf))
         cfg_m06.dcc_path           = dcc_bin
         cfg_m06.threads            = cfg.threads
-        cfg_m06.min_junction_reads = 2
+        cfg_m06.min_junction_reads = cfg.circrna.min_bsj_reads
         cfg_m06.treatment          = treatment or "tumor"
         cfg_m06.control            = control  or "normal"
         cfg_m06.strandedness       = global_strand  # fallback only
@@ -852,6 +853,14 @@ class ModuleRunner:
             if row.get("R1") and row.get("R2"):
                 coldata_fq[sid] = (Path(row["R1"]), Path(row["R2"]))
 
+        # fastp quality options from trimming.* (defaults -q 20 -l 36, cut_right off)
+        tr = cfg.trimming
+        trim_opts = ["-q", str(tr.min_phred), "-l", str(tr.min_length)]
+        if tr.cut_right:
+            trim_opts += ["--cut_right",
+                          "--cut_window_size", str(tr.cut_window_size),
+                          "--cut_mean_quality", str(tr.cut_mean_quality)]
+
         all_ok = True
         for sid in cfg.samples.sample_ids:
             out_sid = out_trim / sid
@@ -875,8 +884,7 @@ class ModuleRunner:
                     "-h", str(out_sid / f"{sid}.fastp.html"),
                     "--thread", str(min(cfg.threads, 16)),
                     "--detect_adapter_for_pe",
-                    "-q", "20", "-l", "36"
-                ]
+                ] + trim_opts
             else:
                 if sid in coldata_fq and coldata_fq[sid][0].exists():
                     r1 = coldata_fq[sid][0]
@@ -889,8 +897,7 @@ class ModuleRunner:
                     "-j", str(out_sid / f"{sid}.fastp.json"),
                     "-h", str(out_sid / f"{sid}.fastp.html"),
                     "--thread", str(min(cfg.threads, 16)),
-                    "-q", "20", "-l", "36"
-                ]
+                ] + trim_opts
 
             ret = run_cmd(cmd, log_file=self._log("m02_trim", sid))
             if ret != 0:
@@ -1814,6 +1821,7 @@ class ModuleRunner:
             "--outdir",      str(out_dir),
             "--padj",        str(cfg.thresholds.padj),
             "--lfc",         str(cfg.thresholds.lfc),
+            "--seed",        str(cfg.project.random_seed),
         ], log_file=self._log("m18_network", comparison)) == 0
 
     # ── M19: RNA editing ────────────────────────────────────────────────────

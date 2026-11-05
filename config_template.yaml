@@ -12,9 +12,8 @@ project:
   wd: /path/to/workdir          # output directory
   organism: human               # human | mouse | rat | zebrafish
   genome_build: hg38            # hg38 | hg19 | mm39 | mm10 | rn7 | GRCz11
-  annotation_version: gencode_v49  # for reproducibility
   biological_context: tumor     # tumor | aging | congenital | other
-  random_seed: 42
+  random_seed: 42               # bowtie2 --seed (M05), M18 network layout, mosaic-refs index builds
 
 # =============================================================================
 # SEQUENCING LIBRARY
@@ -109,7 +108,6 @@ thresholds:
   min_cov_editing:    5
   min_score_editing:  1.5
   min_ef_editing:     0.05
-  editing_model:      "DirMult:PHRED"  # statistical model for JACUSA2
   # Splicing
   min_reads_splicing: 10
   # TE insertions
@@ -150,7 +148,6 @@ modules:
 # PERFORMANCE
 # =============================================================================
 threads: 20
-memory_gb: 30              # available RAM for STAR BAM sort etc.
 
 # =============================================================================
 # TRIMMING
@@ -160,11 +157,12 @@ trimming:
   min_length: 36
   low_complexity_filter: false   # NEVER true — removes TE reads
   trim_poly_x: false             # NEVER true — removes satellite reads (TTAGGG etc.)
+  cut_right: false               # fastp --cut_right (sliding-window 3' trimming)
+  cut_window_size: 4             # used only when cut_right: true
+  cut_mean_quality: 20           # used only when cut_right: true
 
 # =============================================================================
-# REPORT
+# circRNA (M06, DCC)
 # =============================================================================
-report:
-  title: "MOSAIC Analysis Report"
-  remove_test_notes: true        # remove "Note (test data)" callouts
-  produce_pdf: false             # also generate PDF (requires LaTeX)
+circrna:
+  min_bsj_reads: 2               # minimum back-splice junction reads (DCC -Nr)

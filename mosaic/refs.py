@@ -297,7 +297,7 @@ def _tool_available(name: str) -> bool:
 
 
 def build_hisat2_index(genome_fa: Path, index_dir: Path,
-                       gtf: Path, with_dta: bool = False) -> None:
+                       gtf: Path, with_dta: bool = False, seed: int = 42) -> None:
     index_dir.mkdir(parents=True, exist_ok=True)
     index_base = index_dir / "genome"
 
@@ -317,11 +317,11 @@ def build_hisat2_index(genome_fa: Path, index_dir: Path,
         extra = []
 
     cmd = ["hisat2-build", "-p", "8",
-           "--seed", "42"] + extra + [str(genome_fa), str(index_base)]
+           "--seed", str(seed)] + extra + [str(genome_fa), str(index_base)]
     run_cmd(cmd)
 
     # Log build parameters
-    params = {"dta": with_dta, "seed": 42}
+    params = {"dta": with_dta, "seed": seed}
     with open(index_dir / "build_params.yaml", "w") as fh:
         yaml.dump(params, fh)
 
@@ -338,10 +338,11 @@ def build_bwa_index(genome_fa: Path, index_dir: Path) -> None:
     success(f"BWA index built: {dest_fa}")
 
 
-def build_bowtie2_index(fasta: Path, index_dir: Path, tag: str) -> None:
+def build_bowtie2_index(fasta: Path, index_dir: Path, tag: str,
+                        seed: int = 42) -> None:
     index_dir.mkdir(parents=True, exist_ok=True)
     index_base = index_dir / tag
-    run_cmd(["bowtie2-build", "--seed", "42", "-p", "8",
+    run_cmd(["bowtie2-build", "--seed", str(seed), "-p", "8",
              str(fasta), str(index_base)])
     success(f"Bowtie2 index built: {index_base}")
 
@@ -446,8 +447,10 @@ class ReferenceBuilder:
     Used both by mosaic-refs CLI and by the pipeline pre-flight.
     """
 
-    def __init__(self, db_root: Path, organism: str, build: str):
+    def __init__(self, db_root: Path, organism: str, build: str,
+                 seed: int = 42):
         self.db_root  = Path(db_root)
+        self.seed     = seed
         self.organism = organism
         self.build    = build
         self.base     = org_path(self.db_root, organism, build)
@@ -531,7 +534,8 @@ class ReferenceBuilder:
 
         # HISAT2
         if not any((dirs["hisat2_index"]).glob("genome.*.ht2")):
-            build_hisat2_index(genome_fa, dirs["hisat2_index"], gtf, with_dta)
+            build_hisat2_index(genome_fa, dirs["hisat2_index"], gtf, with_dta,
+                               seed=self.seed)
             append_update_log(self.db_root, self.organism, self.build,
                               "hisat2_index", "--", "built",
                               "build_index", f"dta={with_dta}")
