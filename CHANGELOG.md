@@ -40,6 +40,9 @@ manuscript numbers").
 ### Packaging and metadata
 - `environment.yml` pins `r-base=4.5.1`, the R version of the published
   results (was 4.5.2); no other pin changes. (b2f8490)
+- `environment_telescope.yml` aligned with the environment used for the
+  Telescope benchmark (python 3.7.12, telescope 1.0.3, pysam 0.15.3); the
+  former `samtools=1.23` pin made the file unsolvable and is removed.
 - Version 1.1.8 in `setup.py`, `mosaic/__init__.py` and `CITATION.cff`.
   (88a74ab, 9efc4b5)
 - `.zenodo.json` with explicit metadata for the GitHub–Zenodo integration.

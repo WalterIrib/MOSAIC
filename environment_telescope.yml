@@ -9,7 +9,7 @@ channels:
   - bioconda
   - nodefaults
 dependencies:
-  - python=3.7
+  # Pins match the telescope_env37 environment used for the benchmark.
+  - python=3.7.12
   - telescope=1.0.3
-  - samtools=1.23
-  - pysam
+  - pysam=0.15.3
