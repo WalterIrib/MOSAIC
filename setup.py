@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="mosaic-pipeline",
-    version="1.1.0",
+    version="1.1.8",
     description="Multi-layer Omni-transcriptomic Sequencing Analysis and Integrated Characterization",
     author="Walter Arancio",
     packages=find_packages(),
