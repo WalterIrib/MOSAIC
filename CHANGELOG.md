@@ -2,6 +2,70 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [1.1.8] — 2026-11-05 — Configuration wiring, CI start-up test, documentation; analysis unchanged
+
+**Date:** 2026-11-05
+**Supersedes:** v1.1.7 (63bbe55)
+
+No analysis default changes: with the configs of the published runs the
+runtime-resolved fastp commands, DCC `min_junction_reads` and seeds are
+identical to v1.1.7, and the gene, TE-family and satellite DE tables are
+byte-identical to the manuscript outputs (see README, "Reproducibility of the
+manuscript numbers").
+
+### Configuration
+- YAML keys that the code ignored are now wired, with defaults equal to the
+  values previously hard-coded: `trimming.min_phred` (fastp `-q`, 20),
+  `trimming.min_length` (`-l`, 36), `trimming.cut_right` / `cut_window_size` /
+  `cut_mean_quality` (off), `trimming.pe_correction` (`-c`, off; the former
+  default `true` was never applied), `trimming.disable_adapter_trimming` (`-A`,
+  off), `circrna.min_bsj_reads` (DCC `-Nr`, 2; the former dataclass default 5
+  was never applied), `project.random_seed` (42; bowtie2 in M05, M18 layout,
+  `mosaic-refs` index builds). (c42c05a, b58c811)
+- Keys that were never read are removed from the templates and documented as
+  fixed in the README: `thresholds.editing_model`, `memory_gb`,
+  `databases.gtf_bed12`, `databases.ciri2_path`, `project.annotation_version`,
+  `report.*`, `trimming.min_length_warning`; dead `gtf_bed12` branch removed
+  from `_find_or_build_bed12`. (c42c05a, b58c811, da4cae0)
+
+### References
+- `mosaic-refs`: human reference updated to GENCODE v49 / Ensembl 115, the
+  files used for the manuscript and by `db_manager.py`. Other organisms are
+  unchanged. (e8671b2)
+
+### Tests and CI
+- `tests/test_smoke_run.py`: `mosaic run` must reach M02 in a clean temporary
+  directory; added to the automatic `structural` CI job. (3c7ae7d)
+
+### Packaging and metadata
+- Version 1.1.8 in `setup.py`, `mosaic/__init__.py` and `CITATION.cff`.
+  (88a74ab, 9efc4b5)
+- `.zenodo.json` with explicit metadata for the GitHub–Zenodo integration.
+  (f98d3f1)
+- `examples/`: the configs of the two published runs with `${MOSAIC_REF}` /
+  `${MOSAIC_DATA}` paths. (bd0beca)
+- `.gitignore`: indexes built by `generate_test_data.sh` in
+  `test_data/synth_ref/`. (be17349)
+
+### Documentation
+- README: installation and computational requirements, archived versions
+  (Zenodo DOI for v1.1.2), determinism and fixed parameters, reproducibility
+  of the manuscript numbers, smoke-test duration, script name.
+  (e867492, 2a5169e, 44a11db)
+
+### Correction to the [1.1.0] entry
+The [1.1.0] entry states that "the genome-wide run reproduced the canonical
+published loci counts exactly (delta=+0 for all verified comparisons)". This
+is not correct. The genome-wide v1.1 run of 2026-07-09, in the same R
+installation as the manuscript outputs and with a byte-identical
+`mito-ChaRNA_vs_ChaRNA_te_de.tsv`, gives 25,493 significant loci for
+mito-ChaRNA vs ChaRNA instead of 25,489: these are 4 of the 8 loci whose
+shrunk log2FC rounds to ±1.0000 and that are >= 1 at full precision. For the
+results in the current R installation see the README, "Reproducibility of the
+manuscript numbers". The [1.1.0] text below is left unchanged.
+
+---
+
 ## [1.1.7] — 2026-08-17 — Fix: single-source strandedness resolution; explicit validation
 
 **Tag:** v1.1.7 — commit `63bbe55`
