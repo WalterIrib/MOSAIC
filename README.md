@@ -48,7 +48,7 @@ to its tool and to the Results/figures it feeds.
 
 ---
 
-## Installation
+## Installation and computational requirements
 
 ```bash
 git clone https://github.com/WalterIrib/MOSAIC.git
@@ -67,6 +67,33 @@ conda env create -f environment_telescope.yml   # Telescope benchmark only (§4.
 ```
 
 Binary/script tools set via `config.yaml`: Arriba 2.4.0 (M15).
+
+**Software.** `environment.yml` pins the command-line tools and Python libraries
+of the environment that produced the manuscript results (full export:
+`versions.txt`). The R / Bioconductor stack is the system R: all published runs
+used **R 4.5.1**; package versions and build R are listed in `r_versions.txt`.
+
+**Hardware used for the published runs.** One desktop workstation: Intel Core
+i5-13500 (20 threads), 32 GB RAM, no GPU. No cluster is required.
+
+**Disk.** Reference data (`references/` used for the manuscript: genome, GTF,
+STAR / HISAT2 / BWA indexes, DFAM, RepeatMasker, Kraken2 Standard DB, Arriba):
+about 67 GB. The optional HUMAnN3 databases (ChocoPhlAn, MetaPhlAn, UniRef;
+M20b only) add about 111 GB.
+
+**Runtime** (chromatin-RNA dataset, 12 PE libraries, 20 threads; wall-clock from
+the pipeline logs):
+
+| Step | Wall-clock |
+|------|-----------|
+| M02 fastp, 12 samples | 0 h 25 min |
+| M04 STAR, 12 samples | 7 h 30 min |
+| M08 featureCounts, 36 runs (3 comparisons × 12 samples) | 0 h 35 min |
+| M17 rMATS, one comparison (6 samples) | 0 h 03 min |
+| M19 JACUSA2, one comparison (6 samples) | 1 h 01 min |
+
+Steps without timestamps in their logs (DESeq2, bowtie2 TE/satellite counting,
+`bedtools multicov`) are not listed; peak memory was not recorded for these modules.
 
 ### Known limitations (v1.1)
 
@@ -209,9 +236,21 @@ python check_canonical.py --mosaic-output /path/to/mosaic_output
 ```
 Prints PASS/FAIL with expected-vs-observed for gene / TE-family / satellite /
 locus / splicing / editing counts per comparison. TE-locus counts are expected to be
-a few loci above published values (boundary-artefact fix; see CHANGELOG).
+TE-locus counts must match the published values. `check_canonical.py` accepts
+up to +8 loci for mito-ChaRNA vs ChaRNA (`loci_boundary`; +29, +24 and +23 for
+the De Cecco comparisons): these are the significant loci whose
+|log2FC_shrunk| is serialised as 1.0000 in the 4-decimal output tables but is
+below 1 at full precision. `m12_deseq2.R` applies the |log2FC| ≥ 1 threshold to
+the full-precision value, so they are not significant; a threshold applied to
+the rounded tables would count them (Supplementary Table S8).
 
 ---
+
+## Archived versions
+
+| Version | Archive |
+|---------|---------|
+| v1.1.2 (the version cited in the manuscript) | Zenodo, DOI [10.5281/zenodo.23979119](https://doi.org/10.5281/zenodo.23979119) |
 
 ## Citation
 
