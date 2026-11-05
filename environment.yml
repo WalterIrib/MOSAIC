@@ -13,7 +13,10 @@
 #   4.5.1 (not a conda R), with the package versions listed in r_versions.txt
 #   (installed via BiocManager; see scripts/install_r_packages.R). The R stack is
 #   therefore NOT part of versions.txt. The r-base and R-package pins below
-#   reproduce the same package versions inside conda, on r-base 4.5.2.
+#   reproduce the same R and package versions inside conda (r-base 4.5.1).
+#   Under R 4.5.2 the ashr-shrunk log2FC of TE loci differ by up to 0.04,
+#   which moves a few dozen loci across |log2FC| = 1 (README, "Reproducibility
+#   of the manuscript numbers").
 # * Two tools run in SEPARATE environments and are NOT part of this file:
 #     - Telescope 1.0.3  (benchmark only) -> environment_telescope.yml (Python 3.7)
 #     - HUMAnN3 / MetaPhlAn (optional M20b) -> conda env "humann3"
@@ -32,7 +35,7 @@ channels:
 dependencies:
   # ── Core interpreters ──────────────────────────────────────────────────────
   - python=3.11.9
-  - r-base=4.5.2
+  - r-base=4.5.1
   # ── Read trimming / QC ─────────────────────────────────────────────────────
   - fastp=1.1.0
   - rseqc=5.0.4
