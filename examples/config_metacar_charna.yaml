@@ -1,0 +1,120 @@
+# MOSAIC example config: METACAR chromatin-associated RNA, interphase vs mitosis (ENA PRJEB112202).
+# Derived from the config of the published run (md5 of the original: 10be6f9362cd6b835c5dd10fd2961c9d).
+# Changes from the original: absolute paths replaced by ${MOSAIC_REF} (reference
+# databases) and ${MOSAIC_DATA} (project directory with fastq/ and coldata.tsv);
+# keys the code never read removed (databases.ciri2_path, databases.gtf_bed12,
+# project.annotation_version, thresholds.editing_model, memory_gb, report.*).
+# Every other key and value is unchanged.
+#
+#   export MOSAIC_REF=/path/to/references MOSAIC_DATA=/path/to/project
+#   mosaic check examples/config_metacar_charna.yaml
+
+comparisons:
+- control: totRNA
+  treatment: mito-totRNA
+
+- control: ChaRNA
+  treatment: mito-ChaRNA
+
+- name: ChaRNA_interaction
+  type: interaction
+  ref_fraction: totRNA
+  ref_phase: interphase
+
+databases:
+  arriba_bin: ${MOSAIC_REF}/arriba_v2.4.0/arriba
+  arriba_db: ${MOSAIC_REF}/arriba_v2.4.0/database
+  auto_download: false
+  chocophlan_db: ${MOSAIC_REF}/humann3_db/chocophlan/chocophlan
+  db_root: ${MOSAIC_REF}
+  genome_fa: ${MOSAIC_REF}/GRCh38.primary_assembly.genome.fa
+  gtf: ${MOSAIC_REF}/gencode.v49.annotation.gtf
+  kraken2_db: ${MOSAIC_REF}/kraken2_db
+  metaphlan_db: ${MOSAIC_REF}/humann3_db/metaphlan_db
+  rmsk_bed: ${MOSAIC_REF}/rmsk/rmsk.txt.gz
+  star_index: ${MOSAIC_REF}/star_index
+  te_consensus: ${MOSAIC_REF}/dfam/pseudochromosomes/consensus_TE.fa
+  te_gtf: ${MOSAIC_REF}/rmsk/TE.gtf
+  te_satellite: ${MOSAIC_REF}/dfam/pseudochromosomes/consensus_satellite.fa
+  uniref_db: ${MOSAIC_REF}/humann3_db/uniref/uniref
+
+environments:
+  arriba: null
+  humann: humann3
+  main: mosaic
+
+library:
+  layout: PE
+  prep: rRNA_depletion
+
+
+modules:
+  m00_download: false
+  m02_trim: true
+  m04_star: true
+  m05_te_count: true
+  m06_circrna: true
+  m07_strandedness: true
+  m08_deseq2: true
+  m08b_qc: true
+  m10_go: true
+  m11_te_host: true
+  m11b_promoter_te: true
+  m11c_te_age: true
+  m11d_te_de: true
+  m12_tetranscripts: true
+  m14_report: true
+  m15_fusion: true
+  m16_stringtie: true
+  m17_rmats: true
+  m18_network: true
+  m19_editing: true
+  m20_meta: true
+  m20b_humann: true
+  m23_te_insertions: true
+
+project:
+  biological_context: other
+  genome_build: hg38
+  name: metacar_ChaRNA_cell_cycle
+  organism: human
+  random_seed: 42
+  wd: ${MOSAIC_DATA}
+
+
+samples:
+  coldata: ${MOSAIC_DATA}/coldata.tsv
+  fastq_dir: ${MOSAIC_DATA}/fastq
+
+sequencing:
+  read_length: 150
+  strandedness: FR
+  type: PE
+
+threads: 20
+
+m16_novel:
+  class_codes: [u, i, x]
+  min_exons:   2
+  min_length:  200
+  min_cov:     1.0   # primary: mean StringTie coverage (reads/bp)
+  min_tpm:     0.0   # secondary: 0 = disabled
+  min_samples: 2
+
+thresholds:
+  lfc: 1.0
+  min_clip_te: 30
+  min_cov_editing: 5
+  min_ef_editing: 0.05
+  min_reads_meta: 10
+  min_reads_splicing: 10
+  min_samples_meta: 2
+  min_score_editing: 1.5
+  min_support_te: 2
+  padj: 0.05
+
+trimming:
+  low_complexity_filter: false
+  min_length: 36
+  min_phred: 20
+  trim_poly_x: false
