@@ -53,11 +53,14 @@ to its tool and to the Results/figures it feeds.
 ```bash
 git clone https://github.com/WalterIrib/MOSAIC.git
 cd MOSAIC
-conda env create -f environment.yml      # main env "mosaic" (pinned versions)
+CONDA_CHANNEL_PRIORITY=flexible conda env create -f environment.yml   # main env "mosaic" (pinned versions)
 conda activate mosaic
 pip install -e .
 mosaic --version
 ```
+
+(or set it once with `conda config --set channel_priority flexible`; with strict
+priority libmamba excludes the bioconda build of DCC)
 
 Optional separate environments (not needed for the core pipeline):
 
