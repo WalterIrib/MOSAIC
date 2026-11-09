@@ -285,9 +285,10 @@ tagged releases evaluate the inclusive threshold on the full-precision value:
 SEN_L vs SEN_E. With release v1.1.8 in the environment created from
 `environment.yml` (R 4.5.1), the significant sets of all gene-, TE family- and
 satellite-level results are identical to the reported ones and the locus-level
-sets differ only by the threshold rule (+4, +16, +13, +2 significant loci); fold
-changes and adjusted P values agree to within a maximum relative difference of
-0.02 (conda numerical libraries). Under the system R 4.5.2 the gene-, family-
+sets differ only by the threshold rule (+4, +16, +13, +2 significant loci); log2
+fold changes differ from the reported values by at most 0.0006 and adjusted P
+values by at most 2% (relative), differences attributable to the numerical
+libraries of the conda build. Under the system R 4.5.2 the gene-, family-
 and satellite-level tables are byte-identical, whereas ashr-shrunk locus-level
 fold changes differ by up to 0.04 log2 units (net +2, +16, +46, +2; fewer than
 0.02% of tested loci, at most about 0.1% of the significant set), with identical
