@@ -101,6 +101,37 @@ the pipeline logs):
 Steps without timestamps in their logs (DESeq2, bowtie2 TE/satellite counting,
 `bedtools multicov`) are not listed; peak memory was not recorded for these modules.
 
+### Reference data
+
+All paths are set under `databases:` in the YAML (see `config_template.yaml`).
+The set used for the manuscript (human GRCh38, GENCODE release 49) occupies
+**about 67 GB**; the optional HUMAnN3 databases (M20b only) add about 111 GB.
+
+| Component | Needed by | Where it comes from |
+|-----------|-----------|--------------------|
+| Genome FASTA `GRCh38.primary_assembly.genome.fa` and annotation `gencode.v49.annotation.gtf` | alignment, quantification and annotation modules | [GENCODE release 49](https://www.gencodegenes.org/human/release_49.html) (also fetched by `mosaic-refs`) |
+| STAR index (~29 GB) | M04 | built locally from the FASTA and GTF (`STAR --runMode genomeGenerate`) |
+| RepeatMasker table `rmsk/rmsk.txt.gz` (+ `rmsk/TE.gtf` derived from it) | M11, M12 | UCSC, hg38 `rmsk` track: <https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/rmsk.txt.gz> |
+| Dfam library and TE / satellite pseudochromosomes with their bowtie2 indexes | M05, M09 | [Dfam](https://www.dfam.org) 3.9; pseudochromosomes built with `scripts/build_pseudochromosomes.py` |
+| Kraken2 Standard database (~11 GB; the manuscript used the build of 2024-09-13) | M20 | prebuilt Kraken2/Bracken indexes: <https://benlangmead.github.io/aws-indexes/k2> |
+| Arriba 2.4.0 database (`database/` of the Arriba release) | M15 | [Arriba v2.4.0 release](https://github.com/suhrig/arriba/releases/tag/v2.4.0) |
+| BWA index | M23 | built locally (`mosaic-refs`) |
+| HISAT2 index | not used by the pipeline (HISAT2 comparison in the manuscript only) | built locally (`mosaic-refs`) |
+| HUMAnN3 databases (ChocoPhlAn, MetaPhlAn, UniRef) | M20b (optional) | `humann_databases --download …` (HUMAnN3 documentation) |
+
+Assembly constraints in v1.1:
+
+- **Other GENCODE releases of GRCh38** can be used by pointing `genome_fa` and
+  `gtf` to them and rebuilding the STAR index.
+- **The Arriba database is assembly-specific.** M15 passes the GRCh38 files of
+  Arriba 2.4.0 by name (`blacklist_hg38_GRCh38_v2.4.0.tsv.gz`,
+  `known_fusions_hg38_GRCh38_v2.4.0.tsv.gz`,
+  `protein_domains_hg38_GRCh38_v2.4.0.gff3`), so fusion screening runs on GRCh38 only.
+- **M12 needs the RepeatMasker table of the same assembly** as the genome FASTA
+  and GTF: locus coordinates and TE classes are taken from it.
+- **T2T-CHM13 is not supported in v1.1**: Arriba 2.4.0 ships no CHM13 database,
+  and M12 has not been run or tested with a CHM13 RepeatMasker annotation.
+
 ### Known limitations (v1.1)
 
 - **M20b (HUMAnN3 functional profiling) is experimental and not tested in this
