@@ -329,6 +329,9 @@ changes only README.md and CITATION.cff; the pipeline code is that of the tag.
 
 A `CITATION.cff` is provided. Source: <https://github.com/WalterIrib/MOSAIC> (MIT).
 
+Software author: Walter Arancio (sole author of the code archived on Zenodo); the
+manuscript authors are listed in the preferred-citation of CITATION.cff.
+
 ## Author
 
 **Walter Arancio** — IRIB, CNR, Palermo, Italy — walter.arancio@irib.cnr.it
