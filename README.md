@@ -94,7 +94,7 @@ the pipeline logs):
 |------|-----------|
 | M02 fastp, 12 samples | 0 h 25 min |
 | M04 STAR, 12 samples | 7 h 30 min |
-| M08 featureCounts, 36 runs (3 comparisons × 12 samples) | 0 h 35 min |
+| M08 featureCounts, 36 runs (3 comparisons × 12 samples) | 0 h 36 min |
 | M17 rMATS, one comparison (6 samples) | 0 h 03 min |
 | M19 JACUSA2, one comparison (6 samples) | 1 h 01 min |
 
@@ -276,25 +276,24 @@ python check_canonical.py --mosaic-output /path/to/mosaic_output
 Prints PASS/FAIL with expected-vs-observed for gene / TE-family / satellite /
 locus / splicing / editing counts per comparison.
 
-**Reproducibility of the manuscript numbers.** The gene-, TE family- and
-satellite-level results of the manuscript are reproduced exactly (byte-identical
-tables) by re-running the statistical modules of this release on the archived
-count matrices. The locus-level (M12) significant sets differ by fewer than
-0.02% of the tested loci and about 0.1% of the significant set, all at the
-|log2FC| = 1 boundary, for two reasons. (i) The manuscript counts were produced
-before the first tagged release with the |log2FC| >= 1 threshold evaluated as a
-strict inequality on values rounded to four decimals, whereas all tagged
-releases evaluate the inclusive threshold on the full-precision value (8, 29, 24
-and 23 loci round to exactly ±1.0000 in mito-ChaRNA vs ChaRNA, SEN_L vs EP,
-SEN_E vs EP and SEN_L vs SEN_E). With R 4.5.1 and the pinned DESeq2, ashr and
-mixsqp versions (test environment r451; see CHANGELOG) the locus-level sets
-differ from the manuscript only by this rule: +4 (mito-ChaRNA vs ChaRNA,
-25,493), +16 (SEN_L vs EP, 376,180), +13 (SEN_E vs EP, 342,844), +2 (SEN_L vs
-SEN_E, 75,354). (ii) Under R 4.5.2 the ashr shrinkage estimates differ by up to
-0.04 log2 units, so a further few dozen boundary loci change in both directions
-(net +2, +16, +46, +2 vs the manuscript), with identical adjusted P values and
-counts. `check_canonical.py` accepts [published, published + boundary count] and
-passes under R 4.5.1; under R 4.5.2 SEN_E vs EP exceeds the band by 22 loci.
+**Reproducibility of the manuscript numbers.** The manuscript counts were
+produced before the first tagged release with the |log2FC| >= 1 threshold
+evaluated as a strict inequality on values rounded to four decimals, whereas all
+tagged releases evaluate the inclusive threshold on the full-precision value:
+8, 29, 24 and 23 significant loci (adjusted P < 0.05) round to ±1.0000 (9, 66,
+211 and 26 in total) in mito-ChaRNA vs ChaRNA, SEN_L vs EP, SEN_E vs EP and
+SEN_L vs SEN_E. With release v1.1.8 in the environment created from
+`environment.yml` (R 4.5.1), the significant sets of all gene-, TE family- and
+satellite-level results are identical to the reported ones and the locus-level
+sets differ only by the threshold rule (+4, +16, +13, +2 significant loci); fold
+changes and adjusted P values agree to within a maximum relative difference of
+0.02 (conda numerical libraries). Under the system R 4.5.2 the gene-, family-
+and satellite-level tables are byte-identical, whereas ashr-shrunk locus-level
+fold changes differ by up to 0.04 log2 units (net +2, +16, +46, +2; fewer than
+0.02% of tested loci, at most about 0.1% of the significant set), with identical
+adjusted P values. `check_canonical.py` accepts [published, published + boundary
+count] and passes under R 4.5.1; under R 4.5.2 SEN_E vs EP exceeds the band by
+22 loci.
 
 ### Determinism and fixed parameters
 

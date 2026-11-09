@@ -10,8 +10,11 @@ All notable changes to MOSAIC are documented here.
 No analysis default changes: with the configs of the published runs the
 runtime-resolved fastp commands, DCC `min_junction_reads` and seeds are
 identical to v1.1.7, and the gene, TE-family and satellite DE tables are
-byte-identical to the manuscript outputs (see README, "Reproducibility of the
-manuscript numbers").
+byte-identical to the manuscript outputs under the system R 4.5.2 installation
+(see README, "Reproducibility of the manuscript numbers"). In the conda
+environment created from `environment.yml` (R 4.5.1) the significant sets are
+identical and adjusted P values agree to within a maximum relative difference
+of 0.02 (conda numerical libraries).
 
 ### Configuration
 - YAML keys that the code ignored are now wired, with defaults equal to the
