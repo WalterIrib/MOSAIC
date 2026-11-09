@@ -74,6 +74,23 @@ of them loci at ±1.0000 and none lost; under R 4.5.2 the ashr estimates move
 further boundary loci (README, "Reproducibility of the manuscript numbers").
 The [1.1.0] text below is left unchanged.
 
+### Non-regression runs (added after the tag)
+- 2026-11-05: the statistical non-regression (M08 and M12, four comparisons,
+  archived count matrices) ran on commit 2a5169e, 12 commits before the tag;
+  `git diff 2a5169e v1.1.8 -- scripts/ mosaic/` is empty, so the scripts are
+  those of v1.1.8. That day's R 4.5.1 run (M12 only) used the test environment
+  r451 described above, not `environment.yml`.
+- 2026-11-09: repeated on the tag itself (`git archive v1.1.8`) in a conda
+  environment created from its `environment.yml`
+  (`CONDA_CHANNEL_PRIORITY=flexible conda env create`; R 4.5.1, DESeq2 1.50.2,
+  ashr 2.2.63, mixsqp 0.3.54), M08 and M12 for the four comparisons. The
+  significant gene, TE-family and satellite sets equal those of the manuscript;
+  M12 gives +4, +16, +13 and +2 loci, all at ±1.0000 and none lost, with locus
+  tables byte-identical to those of the r451 run. The full tables are not
+  byte-identical to the manuscript outputs: adjusted P values differ in the last
+  digits (largest relative difference 0.02, maximum shrunk log2FC difference
+  0.0006), and no gene, family, satellite or locus changes significance.
+
 ---
 
 ## [1.1.7] — 2026-08-17 — Fix: single-source strandedness resolution; explicit validation
