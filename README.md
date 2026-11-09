@@ -316,6 +316,11 @@ passes under R 4.5.1; under R 4.5.2 SEN_E vs EP exceeds the band by 22 loci.
 | v1.1.2 (the version cited in the manuscript) | Zenodo, DOI [10.5281/zenodo.23979119](https://doi.org/10.5281/zenodo.23979119) |
 | v1.1.8 | Zenodo, DOI [10.5281/zenodo.23983678](https://doi.org/10.5281/zenodo.23983678) |
 
+The v1.1.8 row (and the DOI identifiers in `CITATION.cff`) were added on master
+after the tag, once Zenodo had assigned the DOI: the README and `CITATION.cff`
+inside the v1.1.8 archive list only the v1.1.2 DOI. That commit (41279a5)
+changes only README.md and CITATION.cff; the pipeline code is that of the tag.
+
 ## Citation
 
 > Sciaraffa N, Russo R, Zito F, Cusimano A, Arancio W. *MOSAIC: an automated RNA-seq
