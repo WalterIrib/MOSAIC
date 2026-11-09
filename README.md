@@ -283,6 +283,7 @@ passes under R 4.5.1; under R 4.5.2 SEN_E vs EP exceeds the band by 22 loci.
 | Version | Archive |
 |---------|---------|
 | v1.1.2 (the version cited in the manuscript) | Zenodo, DOI [10.5281/zenodo.23979119](https://doi.org/10.5281/zenodo.23979119) |
+| v1.1.8 | Zenodo, DOI [10.5281/zenodo.23983678](https://doi.org/10.5281/zenodo.23983678) |
 
 ## Citation
 

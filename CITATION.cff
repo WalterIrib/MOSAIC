@@ -6,6 +6,13 @@ version: 1.1.8
 date-released: "2026-11-05"
 url: "https://github.com/WalterIrib/MOSAIC"
 repository-code: "https://github.com/WalterIrib/MOSAIC"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23979119
+    description: "v1.1.2, manuscript version"
+  - type: doi
+    value: 10.5281/zenodo.23983678
+    description: "v1.1.8"
 license: MIT
 abstract: >
   MOSAIC is a modular, automated pipeline for comprehensive multi-omic RNA-seq
