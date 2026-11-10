@@ -100,6 +100,7 @@ the pipeline logs):
 
 Steps without timestamps in their logs (DESeq2, bowtie2 TE/satellite counting,
 `bedtools multicov`) are not listed; peak memory was not recorded for these modules.
+The hardware record is in `docs/hardware_2026-11-09.txt`; Supplementary Table S10 of the revised manuscript is built by `scripts/make_tableS10.py --edition s10` from `docs/table_s10/perf_table.tsv` and `docs/table_s10/tools_extra.tsv` (usage in the script header).
 
 ### Reference data
 

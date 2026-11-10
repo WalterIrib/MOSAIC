@@ -1,0 +1,28 @@
+module	tool	n_samples	total_wall_sec	mean_per_sample_sec	wall_hms_total	note
+m02_fastp	fastp 1.1.0	12	1527	127.25	0h25m27s	times from mosaic_output/logs/m02_trim_{samp}.log: 127,134,124,127,129,121,127,128,127,125,149,109s
+m04_star	STAR 2.7.10b	12	27019	2251	7h30m19s	sum over 12 samples of start/finish timestamps ('started STAR run' -> 'finished successfully') in mosaic_output/logs/m04_star_{samp}.log; the canonical Log.final.out files are not available
+m08_featurecounts	featureCounts (subread)	12	2160	60.0	0h36m0s	sum of 36 'Running time' values from m08_featurecounts_*.log
+m08_deseq2	DESeq2 1.50.2 (R)	12	N/A	N/A	N/A	no wall-clock timestamps in log
+m09_satellite	bowtie2 (satellite)	12	N/A	N/A	N/A	no wall-clock timestamps in per-sample logs
+m12_bedtools_multicov	bedtools 2.31.1	12	N/A	N/A	N/A	no timestamps in log; MOSAIC ran all 12 samples as single batch
+m17_rmats	rMATS 4.3.0	6	205	34	0h3m25s	sum of internal step times (gtf+novel+save+loadsg+ase+count) for mito-ChaRNA_vs_ChaRNA
+m19_jacusa2	JACUSA2 2.1.16	6	3667	611	1h1m7s	start 13:55:52 → end 14:56:59; mito-ChaRNA_vs_ChaRNA; 20 threads
+p15_salmon_quant	salmon quant 2.2.1	6	9300	1550	2h35m	4 threads/sample; gcBias; validateMappings; 80-90% mapping rate; 12:14:07→14:48:56
+p15_deseq2_salmon	DESeq2+tximport (salmon input)	6	23	N/A	0:23	Peak RSS 1437MB; 85.3% concordance with MOSAIC; LFC r=0.87
+p13_telescope_ChaRNA1	Telescope 1.0.3 (TE-filtered)	1	331	331	5:31	ChaRNA1, chr1+chr2 TE BAM, Peak RSS 11430MB, ncpu=1, direct binary (no conda run)
+p13_telescope_ChaRNA2	Telescope 1.0.3 (TE-filtered)	1	330	330	5:30	ChaRNA2, chr1+chr2 TE BAM, Peak RSS 11298MB, ncpu=1, direct binary (no conda run)
+p13_telescope_ChaRNA3	Telescope 1.0.3 (TE-filtered)	1	326	326	5:26	ChaRNA3, chr1+chr2 TE BAM, Peak RSS 11454MB, ncpu=1, direct binary (no conda run)
+p14_suppa2	SUPPA2 (empirical diffSplice)	6	1089	N/A	18:09	Peak RSS 1507MB; 7 event types; pval<0.05+|dPSI|>0.1
+p12_reditools3	REDItools3 3.7 (chr1 only)	6	3600	~720	~60min	Chr1; 2 threads; USB BAMs; ChaRNA1 pre-esistente; ~11-14 min/sample
+p11b_perm_fdr_genes	DESeq2 permutation (genes)	6	N/A	N/A	N/A	C(6,3)=20 perms; 18 non-trivial; 0/18 with >=1 sig gene; empirical FDR=0.000
+p11b_perm_fdr_te	DESeq2 permutation (TE loci)	6	153	N/A	2:33	C(6,3)=20 perms; 18 non-trivial; 6/18 with >=1 sig locus; max 999; empirical FDR=0.0126; Peak RSS 1001MB
+p13_telescope_mito-ChaRNA1	Telescope 1.0.3 (TE-filtered)	1	443	443	7:23	mito-ChaRNA1; includes BAM extract; chr1+chr2; Peak RSS 10928MB
+p13_telescope_mito-ChaRNA2	Telescope 1.0.3 (TE-filtered)	1	449	449	7:29	mito-ChaRNA2; includes BAM extract; Peak RSS 10976MB
+p13_telescope_mito-ChaRNA3	Telescope 1.0.3 (TE-filtered)	1	440	440	7:20	mito-ChaRNA3; includes BAM extract; Peak RSS 10998MB
+p13_telescope_lfc_deseq2	DESeq2 on Telescope 6-sample matrix	6	38	N/A	0:38	257,844 total Telescope loci (chr1+chr2, EM-based DESeq2); 2,732 overlap with MOSAIC M12 significant loci (padj<0.05, |LFC|≥1) used for per-locus Pearson r=0.52 (§2.4.2); Peak RSS 1617MB
+S1	SEN_L_vs_EP	663	2026-07-02 08:50:39
+S2	SEN_E_vs_EP	593	2026-07-02 09:00:32
+S3	SEN_L_vs_SEN_E	178	2026-07-02 09:03:30
+S4	mito-ChaRNA_vs_ChaRNA	157	2026-07-02 09:06:07
+S5	mito-totRNA_vs_totRNA	136	2026-07-02 09:08:23
+S6	ChaRNA_interaction	65	2026-07-02 09:09:28
