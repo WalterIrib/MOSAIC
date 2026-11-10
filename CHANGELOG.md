@@ -2,6 +2,11 @@
 
 All notable changes to MOSAIC are documented here.
 
+## [Unreleased]
+
+- Added `scripts/make_tableS10.py`, the generator of Supplementary Table S10 of the revised manuscript, with its inputs (`docs/table_s10/perf_table.tsv`, `docs/table_s10/tools_extra.tsv`) and the hardware record of the published runs (`docs/hardware_2026-11-09.txt`) (bc9c3ce).
+- `make_tableS10.py`: `--edition s10` is now the default; `--edition s6` (Table S6 of the August 2026 submission) must be requested explicitly.
+
 ## [1.1.8] — 2026-11-05 — Configuration wiring, CI start-up test, documentation; analysis unchanged
 
 **Date:** 2026-11-05

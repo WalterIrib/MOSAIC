@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""S6: versions + key commands + performance (three-block xlsx + tsv).
+"""Table S10: versions + key commands + performance (three-block xlsx + tsv).
 
---edition s6 (default) reproduces the original Table S6 unchanged.
---edition s10 builds Table S10: adds the rows of tools_extra.tsv and applies
-the S10 corrections (see S10_* below).
+--edition s10 (default) builds Table S10: adds the rows of tools_extra.tsv and
+applies the S10 corrections (see S10_* below).
+--edition s6 (only when given explicitly) reproduces the original Table S6 unchanged.
 
 usage (Table S10 of the revised manuscript, from the repository root):
-  python3 scripts/make_tableS10.py --edition s10 --perf docs/table_s10/perf_table.tsv \
+  python3 scripts/make_tableS10.py --perf docs/table_s10/perf_table.tsv \
       --extra-tools docs/table_s10/tools_extra.tsv --out <output directory>
 """
 import pandas as pd, openpyxl, os, argparse
@@ -18,7 +18,8 @@ ap.add_argument("--out", required=True,
                 help="output directory")
 ap.add_argument("--perf", required=True,
                 help="performance table for Block 3 (docs/table_s10/perf_table.tsv)")
-ap.add_argument("--edition", choices=["s6", "s10"], default="s6")
+# s6 = historical edition: Table S6 of the August 2026 submission (kept for provenance only)
+ap.add_argument("--edition", choices=["s6", "s10"], default="s10")
 ap.add_argument("--extra-tools", required=True,
                 help="extra Block 1 rows for --edition s10 (docs/table_s10/tools_extra.tsv; "
                      "columns: after, category, tool, version, note)")
